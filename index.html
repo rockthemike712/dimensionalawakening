@@ -76,10 +76,13 @@
   #eye.held svg{transform:scaleY(.12)}   /* the eye closes */
   #eye.held .pupil{transform:scale(.2)}
   #eye:focus-visible{outline:1px solid rgba(170,255,255,.9);outline-offset:3px}
+  #eyeLabel{position:absolute;right:max(10px,env(safe-area-inset-right));bottom:calc(max(14px,env(safe-area-inset-bottom)) + 44px);
+    width:70px;text-align:center;font-size:8px;letter-spacing:.14em;text-transform:uppercase;opacity:.55;display:none;transition:opacity .6s}
   @media (max-width:700px){
     #foldHint{display:none}
     #prompt{font-size:12px;bottom:calc(max(14px,env(safe-area-inset-bottom)) + 162px)}
     #title{font-size:9px}
+    #title .sub{display:none}
   }
   @media (prefers-reduced-motion:reduce){
     #title,#beaconArrow span,#eye,#pips i.lit{animation:none}
@@ -90,7 +93,7 @@
 </head>
 <body>
 <div id="ui">
-  <div id="title">Dimensional Awakening / Fold Study V6</div>
+  <div id="title">Dimensional Awakening<span class="sub"> / Fold Study V6</span></div>
   <div id="count">LIGHTS 0 / 3</div>
   <div id="pips"><i></i><i></i><i></i></div>
   <div id="moveStatus">TAP AN ARROW TO MOVE</div>
@@ -111,6 +114,7 @@
       <circle class="pupil" cx="13" cy="9" r="3.4" fill="#aefcff"/>
     </svg>
   </button>
+  <div id="eyeLabel">hold &middot; close eyes</div>
 </div>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.min.js"}}
@@ -327,17 +331,38 @@ function updateLandmarks(){
 // left half (which never folds). The one rule, never stated in math terms:
 // the lights behave differently when watched. Watched (player near the gaps,
 // eyes open) -> two piles. Unwatched -> stripes. Standing in a gap blocks it.
+//
+// The puzzle is legible: the detector shows a ghost OUTLINE of the shape it
+// wants, and the player's job is to make the glowing bars fill it. Three
+// rounds, each solvable only in its mode: two piles -> stripes -> one pile.
 const S2={
-  active:false,eyes:false,done:0,spawnT:0,startT:0,hintShown:false,
-  dots:[],bins:[],pads:[],
-  center:new THREE.Vector3(-5.6,0,0)
+  active:false,eyes:false,done:0,round:0,spawnT:0,startT:0,roundT:0,
+  match:0,hold:0,hinted:false,arrived:false,eyeUsed:false,
+  dots:[],bins:[],ghost:[],
+  center:new THREE.Vector3(-6.6,0,0)
 };
 const S2_BARX=-5, S2_DETX=-9.6, S2_EMIT=new THREE.Vector3(-1.6,0,0);
 // fringe spacing 3.4 with bands at +-1.7 puts each watched band exactly on a
 // dark fringe, so the watched and unwatched patterns are visibly disjoint
 const S2_GAPZ=1.2, S2_GAPHW=.62, S2_BAND=1.7, S2_K=Math.PI/3.4, S2_WATCH_R=4.6;
+const S2_HOLD=2.6, S2_THRESH=.66;
 const s2Group=new THREE.Group(); s2Group.visible=false; world.add(s2Group);
-const eyeBtn=document.getElementById('eye'), veil=document.getElementById('veil');
+const eyeBtn=document.getElementById('eye'), veil=document.getElementById('veil'), eyeLabel=document.getElementById('eyeLabel');
+
+const gpdf=(z,mu,s)=>Math.exp(-(z-mu)*(z-mu)/(2*s*s));
+// each round: the target shape (as a function of detector z) and the hint
+// that appears only if the player is stuck
+const S2_ROUNDS=[
+  {name:'piles',  profile:z=>gpdf(z,S2_BAND,.5)+gpdf(z,-S2_BAND,.5),
+   intro:'Make the lights land like the outline.',
+   hint:'Stand close to the gaps. Watch them.'},
+  {name:'stripes',profile:z=>Math.pow(Math.cos(S2_K*z),2)*Math.exp(-z*z/20.5),
+   intro:'Now this shape.',
+   hint:'They behave differently when you are far away. Or when your eyes are closed.'},
+  {name:'one',    profile:z=>gpdf(z,-S2_BAND,.9),
+   intro:'One more.',
+   hint:'Stand in a gap.'}
+];
 
 function gauss(mu,sig){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();
   return mu+sig*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
@@ -357,7 +382,7 @@ function s2BlockedGap(){
 }
 
 function buildStage2(){
-  const wallMat=new THREE.MeshBasicMaterial({color:0x2ee9ff,transparent:true,opacity:.2,
+  const wallMat=new THREE.MeshBasicMaterial({color:0x2ee9ff,transparent:true,opacity:.34,
     blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false});
   // barrier segments leaving gaps at z = +-S2_GAPZ
   const segs=[[-9,-S2_GAPZ-S2_GAPHW],[-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW],[S2_GAPZ+S2_GAPHW,9]];
@@ -365,35 +390,29 @@ function buildStage2(){
     const w=new THREE.Mesh(new THREE.PlaneGeometry(z1-z0,2.0),wallMat);
     w.rotation.y=Math.PI/2;w.position.set(S2_BARX,1.0,(z0+z1)/2);s2Group.add(w);
   }
+  // doorposts so the two gaps read as openings you can stand in
+  const postMat=new THREE.MeshBasicMaterial({color:0xaefcff});
+  for(const z of [-S2_GAPZ-S2_GAPHW,-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW,S2_GAPZ+S2_GAPHW]){
+    const p=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,2.2,6),postMat);
+    p.position.set(S2_BARX,1.1,z);s2Group.add(p);
+  }
   // emitter
   const em=new THREE.Mesh(new THREE.OctahedronGeometry(.34,0),
     new THREE.MeshStandardMaterial({color:0xffffff,emissive:0x55ffff,emissiveIntensity:4,roughness:.1}));
   em.position.set(S2_EMIT.x,.8,S2_EMIT.z);s2Group.add(em);S2.emitter=em;
   const el=new THREE.PointLight(0x6cffff,20,9);el.position.copy(em.position);s2Group.add(el);
-  // detector columns
+  // detector columns (live) + ghost outline (target) around each column
   const binGeo=new THREE.BoxGeometry(.24,1,.26);
+  const ghostGeo=new THREE.EdgesGeometry(new THREE.BoxGeometry(.34,1,.3));
   for(let i=0;i<44;i++){
     const z=-6.45+i*.3;
     const m=new THREE.Mesh(binGeo,new THREE.MeshStandardMaterial({color:0x0a2a38,
       emissive:0x28d9ff,emissiveIntensity:.15,roughness:.4}));
     m.position.set(S2_DETX,.05,z);m.scale.y=.08;
     s2Group.add(m);S2.bins.push({m,z,n:0});
-  }
-  // pads: one demands watching, two demand not-watching (fringe centers)
-  // pad placement is the puzzle: the watch pad sits on a band center (a dark
-  // fringe for waves); the wave pads sit where the two-band pattern is ~zero
-  const padDefs=[
-    {z:S2_BAND,w:.5},   // band center = dark fringe: fills only while watched
-    {z:0,w:.6},         // central bright fringe — only while unwatched
-    {z:-3.4,w:.6}       // second bright fringe — only while unwatched
-  ];
-  for(const d of padDefs){
-    const frame=new THREE.Mesh(new THREE.PlaneGeometry(.95,d.w*2+.25),
-      new THREE.MeshBasicMaterial({color:0x8ffcff,transparent:true,opacity:.22,
-        blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false}));
-    frame.rotation.x=-Math.PI/2;frame.position.set(S2_DETX+.75,.03,d.z);
-    s2Group.add(frame);
-    S2.pads.push({z:d.z,w:d.w,need:12,got:0,doneFlag:false,m:frame});
+    const g=new THREE.LineSegments(ghostGeo,new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:.2}));
+    g.position.set(S2_DETX,.05,z);g.scale.y=.08;
+    s2Group.add(g);S2.ghost.push(g);
   }
   // dot pool
   const dotGeo=new THREE.SphereGeometry(.11,8,8);
@@ -404,47 +423,57 @@ function buildStage2(){
   }
 }
 
+function s2SetRound(r){
+  S2.round=r;S2.roundT=clock.elapsedTime;S2.hold=0;S2.hinted=false;
+  const R=S2_ROUNDS[r];
+  // target heights on the same scale as the live bars
+  let mx=0;const tp=S2.bins.map(b=>{const v=R.profile(b.z);mx=Math.max(mx,v);return v;});
+  S2.target=tp.map(v=>v/mx);
+  S2.ghost.forEach((g,i)=>{g.userData.h=.08+S2.target[i]*2.1;});
+  if(S2.arrived)setPrompt(R.intro);
+}
+
 function startStage2(){
   if(S2.active)return;
   buildStage2();
   S2.active=true;S2.startT=clock.elapsedTime;s2Group.visible=true;
   countEl.textContent='PATTERNS 0 / 3';setPips(0);
-  eyeBtn.style.display='grid';
+  eyeBtn.style.display='grid';eyeLabel.style.display='block';
+  s2SetRound(0);
   setPrompt('Something is pouring new lights into the world. Go close.');
   emitRipple(S2_EMIT.x,S2_EMIT.z,1.6);
 }
 
 function s2Hit(z){
-  // nearest bin lights up; the pattern is alive and slowly forgets
   let bi=Math.round((z+6.45)/.3);
   if(bi>=0&&bi<S2.bins.length){S2.bins[bi].n=Math.min(S2.bins[bi].n+1,26);}
   blip(420+Math.abs(z)*60,.12,S2.eyes?.14:.06,'sine',z/7);
-  for(const p of S2.pads){
-    if(p.doneFlag||Math.abs(z-p.z)>p.w)continue;
-    p.got++;
-    if(p.got>=p.need){
-      p.doneFlag=true;S2.done++;countEl.textContent=`PATTERNS ${S2.done} / 3`;
-      setPips(S2.done);
-      pulseFlash();chime();emitRipple(S2_DETX,p.z,1.5);
-      if(S2.done===3){
-        setPrompt('They knew when you were watching.');
-        setTimeout(()=>setPrompt('What else knows?'),3600);
-        setTimeout(()=>setPrompt('DIMENSIONAL AWAKENING — to be continued'),7600);
-      }
-    }
-  }
+}
+
+function s2RoundDone(){
+  S2.done++;countEl.textContent=`PATTERNS ${S2.done} / 3`;setPips(S2.done);
+  pulseFlash();chime();
+  for(let i=0;i<S2.bins.length;i+=6)emitRipple(S2_DETX,S2.bins[i].z,.5);
+  if(S2.done>=3){
+    setPrompt('They knew when you were watching.');
+    setTimeout(()=>setPrompt('What else knows?'),3600);
+    setTimeout(()=>setPrompt('DIMENSIONAL AWAKENING — to be continued'),7600);
+    S2.ghost.forEach(g=>g.visible=false);
+  }else s2SetRound(S2.done);
 }
 
 function updateStage2(dt,t){
   if(!S2.active)return;
   S2.emitter.rotation.y=t*1.1;
   S2.emitter.position.y=.8+.1*Math.sin(t*2.3);
-  // teach without words: one line, once, after the player has seen some dots
-  if(!S2.hintShown&&t-S2.startT>7){S2.hintShown=true;setPrompt('The lights behave differently when watched.');}
+  // when the player first reaches the apparatus, name the goal once
+  if(!S2.arrived&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<5.5){
+    S2.arrived=true;S2.roundT=t;setPrompt(S2_ROUNDS[S2.round].intro);
+  }
   // spawn
   S2.spawnT-=dt;
   if(S2.spawnT<=0){
-    S2.spawnT=.11;
+    S2.spawnT=.085;
     const d=S2.dots.find(d=>!d.on);
     if(d){
       const blocked=s2BlockedGap();
@@ -490,18 +519,41 @@ function updateStage2(dt,t){
       s2Hit(d.landZ);d.on=false;d.m.visible=false;
     }
   }
-  // live histogram: columns grow toward counts, and slowly forget,
-  // so switching between watched/unwatched visibly reshapes the pattern
+  // live histogram: forgets quickly (half-life ~2.5s) so the shape follows
+  // the player's choices within a few seconds
+  let total=0;
   for(const b of S2.bins){
-    b.n*=Math.exp(-dt*.055);
+    b.n*=Math.exp(-dt*.28);total+=b.n;
     const h=.08+b.n*.085;
     b.m.scale.y+=(h-b.m.scale.y)*(1-Math.pow(.001,dt));
     b.m.position.y=b.m.scale.y/2;
     b.m.material.emissiveIntensity=.15+b.n*.09;
   }
-  for(const p of S2.pads){
-    p.m.material.opacity=p.doneFlag?.85:.2+.5*(p.got/p.need)+.06*Math.sin(t*3);
-    if(p.doneFlag)p.m.material.color.setHex(0xffffff);
+  if(S2.done>=3)return;
+  // how well does the live shape match the ghost? (L1 between distributions)
+  let m=0;
+  if(total>14){
+    let tsum=0;for(const v of S2.target)tsum+=v;
+    let l1=0;S2.bins.forEach((b,i)=>{l1+=Math.abs(b.n/total-S2.target[i]/tsum);});
+    m=Math.max(0,1-l1*.5);
+  }
+  S2.match+=(m-S2.match)*(1-Math.pow(.05,dt));
+  const ok=S2.match>S2_THRESH;
+  S2.hold=ok?S2.hold+dt:Math.max(0,S2.hold-dt*1.5);
+  const prog=Math.min(1,S2.hold/S2_HOLD);
+  // the ghost outline: dim when far from matching, brightening toward white,
+  // pulsing as the hold completes
+  const bright=.18+.55*S2.match+.3*prog*(.6+.4*Math.sin(t*9));
+  S2.ghost.forEach(g=>{
+    g.scale.y+=(g.userData.h-g.scale.y)*(1-Math.pow(.001,dt));
+    g.position.y=g.scale.y/2;
+    g.material.opacity=Math.min(1,bright);
+    g.material.color.setRGB(.55+.45*prog,1,1);
+  });
+  if(S2.hold>=S2_HOLD)s2RoundDone();
+  // stuck? one plain-words hint per round
+  if(S2.arrived&&!S2.hinted&&t-S2.roundT>10&&prog<.3){
+    S2.hinted=true;setPrompt(S2_ROUNDS[S2.round].hint);
   }
 }
 
@@ -509,7 +561,7 @@ function updateStage2(dt,t){
 function setEyes(c){
   S2.eyes=c;veil.style.opacity=c?.87:0;
   eyeBtn.classList.toggle('held',c);
-  if(c&&S2.active)setPrompt('Listen.');
+  if(c&&S2.active){setPrompt('Listen.');if(!S2.eyeUsed){S2.eyeUsed=true;eyeLabel.style.opacity=0;}}
 }
 eyeBtn.addEventListener('pointerdown',e=>{e.preventDefault();setEyes(true);audio();});
 eyeBtn.addEventListener('pointerup',()=>setEyes(false));
@@ -579,13 +631,13 @@ function updatePlayer(dt){
      crossT=clock.elapsedTime; // the moment space turns around you
      pulseFlash(); blip(196,.4,.15,'sine'); blip(392,.5,.1,'sine');
      awakened=Math.min(1,awakened+.1);planeMat.uniforms.uAwake.value=awakened;
-     if(seeds>=1) setPrompt('Two distant places just touched. Keep going.');
+     if(seeds>=1&&!S2.active) setPrompt('Two distant places just touched. Keep going.');
    }else{
      // unfolded: the seam is a wall — push back toward the side the player came from
      const from=prevX<0?-1:1;
      playerPos.x=from<0?Math.min(playerPos.x,-.45):Math.max(playerPos.x,.45);
      if(prevX!==playerPos.x&&Math.abs(velocity.x)>1)velocity.x*=-.25;
-     if(seeds>=1&&fold<FOLD_OPEN)setPrompt('The wall of light will not let you pass. Grab the seam and pull.');
+     if(seeds>=1&&fold<FOLD_OPEN&&!S2.active)setPrompt('The wall of light will not let you pass. Grab the seam and pull.');
    }
  }
  // stage 2 barrier: solid except at the two gaps — your body can plug one
@@ -673,6 +725,7 @@ renderer.domElement.addEventListener('pointermove',e=>{
   if(!dragging)return;
   const delta=(dragStartX-e.clientX)/Math.max(innerWidth*.38,260);
   foldTarget=THREE.MathUtils.clamp(dragStartFold+delta,0,1);
+  if(S2.active)return;
   if(foldTarget>.35&&seeds>=1&&fold<FOLD_OPEN)setPrompt('Keep folding. Make two places become one.');
   if(foldTarget>FOLD_OPEN&&seeds>=1)setPrompt('The halves are touching. Walk into the seam.');
 });
@@ -717,7 +770,7 @@ function animate(){
 
  const wob=awakened*.25;
  const target=foldedPoint(playerPos);target.y=0;
- if(S2.active&&S2.done<3)target.lerp(S2.center,.4); // keep the apparatus in frame
+ if(S2.active&&S2.done<3)target.lerp(S2.center,portraitMode()?.55:.45); // keep the apparatus in frame
  if(portraitMode()){
    // Onboarding: fixed frame containing both player and first beacon so
    // movement is visually undeniable. Afterwards: follow the player.
@@ -751,7 +804,7 @@ addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updat
 // read-only state hook for automated smoke tests (see docs/HANDOFF.md §18 on
 // why testability matters more than usual for this project)
 window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get seeds(){return seeds},get moves(){return moveCount},
-  get s2(){return {active:S2.active,done:S2.done,pads:S2.pads.map(p=>p.got),eyes:S2.eyes}},
+  get s2(){return {active:S2.active,done:S2.done,round:S2.round,match:+S2.match.toFixed(2),hold:+S2.hold.toFixed(1),eyes:S2.eyes}},
   s2start:startStage2};
 </script>
 </body>
