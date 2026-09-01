@@ -337,14 +337,14 @@ function updateLandmarks(){
 // rounds, each solvable only in its mode: two piles -> stripes -> one pile.
 const S2={
   active:false,eyes:false,done:0,round:0,spawnT:0,startT:0,roundT:0,
-  match:0,hold:0,hinted:false,arrived:false,eyeUsed:false,
+  match:0,hold:0,hinted:false,arrived:false,eyeUsed:false,lastBlk:0,
   dots:[],bins:[],ghost:[],
   center:new THREE.Vector3(-6.6,0,0)
 };
 const S2_BARX=-5, S2_DETX=-9.6, S2_EMIT=new THREE.Vector3(-1.6,0,0);
 // fringe spacing 3.4 with bands at +-1.7 puts each watched band exactly on a
 // dark fringe, so the watched and unwatched patterns are visibly disjoint
-const S2_GAPZ=1.2, S2_GAPHW=.62, S2_BAND=1.7, S2_K=Math.PI/3.4, S2_WATCH_R=4.6;
+const S2_GAPZ=1.6, S2_GAPHW=.9, S2_BAND=1.7, S2_K=Math.PI/3.4, S2_WATCH_R=4.6;
 const S2_HOLD=2.6, S2_THRESH=.66;
 const s2Group=new THREE.Group(); s2Group.visible=false; world.add(s2Group);
 const eyeBtn=document.getElementById('eye'), veil=document.getElementById('veil'), eyeLabel=document.getElementById('eyeLabel');
@@ -360,8 +360,8 @@ const S2_ROUNDS=[
    intro:'Now this shape.',
    hint:'They behave differently when you are far away. Or when your eyes are closed.'},
   {name:'one',    profile:z=>gpdf(z,-S2_BAND,.9),
-   intro:'One more.',
-   hint:'Stand in a gap.'}
+   intro:'One more. The wall has two openings.',
+   hint:'Walk into one of the glowing openings in the wall. Block it with your body.'}
 ];
 
 function gauss(mu,sig){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();
@@ -375,26 +375,38 @@ function sampleFringe(){
 }
 function s2NearSlits(){return Math.hypot(playerPos.x-S2_BARX,playerPos.z)<S2_WATCH_R;}
 function s2BlockedGap(){
-  if(Math.abs(playerPos.x-S2_BARX)>=.7)return 0;
-  if(Math.abs(playerPos.z-S2_GAPZ)<S2_GAPHW+.15)return 1;
-  if(Math.abs(playerPos.z+S2_GAPZ)<S2_GAPHW+.15)return -1;
+  if(Math.abs(playerPos.x-S2_BARX)>=1.0)return 0;
+  if(Math.abs(playerPos.z-S2_GAPZ)<S2_GAPHW+.35)return 1;
+  if(Math.abs(playerPos.z+S2_GAPZ)<S2_GAPHW+.35)return -1;
   return 0;
 }
 
 function buildStage2(){
-  const wallMat=new THREE.MeshBasicMaterial({color:0x2ee9ff,transparent:true,opacity:.34,
-    blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false});
-  // barrier segments leaving gaps at z = +-S2_GAPZ
+  // a wall that reads as a wall on a phone: solid-ish slab with a bright
+  // top edge, split into segments that leave two openings at z = +-S2_GAPZ
+  const wallMat=new THREE.MeshBasicMaterial({color:0x1a9fbf,transparent:true,opacity:.5,depthWrite:false});
+  const edgeMat=new THREE.MeshBasicMaterial({color:0xaefcff});
   const segs=[[-9,-S2_GAPZ-S2_GAPHW],[-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW],[S2_GAPZ+S2_GAPHW,9]];
+  S2.wallSegs=[];
   for(const [z0,z1] of segs){
-    const w=new THREE.Mesh(new THREE.PlaneGeometry(z1-z0,2.0),wallMat);
-    w.rotation.y=Math.PI/2;w.position.set(S2_BARX,1.0,(z0+z1)/2);s2Group.add(w);
+    const w=new THREE.Mesh(new THREE.BoxGeometry(.22,1.9,z1-z0),wallMat.clone());
+    w.position.set(S2_BARX,.95,(z0+z1)/2);s2Group.add(w);S2.wallSegs.push(w);
+    const e=new THREE.Mesh(new THREE.BoxGeometry(.26,.04,z1-z0),edgeMat);
+    e.position.set(S2_BARX,1.91,(z0+z1)/2);s2Group.add(e);
   }
-  // doorposts so the two gaps read as openings you can stand in
-  const postMat=new THREE.MeshBasicMaterial({color:0xaefcff});
+  // doorposts + a glowing floor pad in each opening: "you can stand here"
+  const postMat=new THREE.MeshBasicMaterial({color:0xdfffff});
   for(const z of [-S2_GAPZ-S2_GAPHW,-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW,S2_GAPZ+S2_GAPHW]){
-    const p=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,2.2,6),postMat);
-    p.position.set(S2_BARX,1.1,z);s2Group.add(p);
+    const p=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,2.3,8),postMat);
+    p.position.set(S2_BARX,1.15,z);s2Group.add(p);
+  }
+  S2.gapPads=[];
+  for(const g of [1,-1]){
+    // a solid doormat, not an additive glow: it has to read over a bright grid
+    const pad=new THREE.Mesh(new THREE.BoxGeometry(1.9,.08,S2_GAPHW*2-.1),
+      new THREE.MeshBasicMaterial({color:0x8ffcff,transparent:true,opacity:.45}));
+    pad.position.set(S2_BARX,.04,g*S2_GAPZ);
+    s2Group.add(pad);S2.gapPads.push({m:pad,g});
   }
   // emitter
   const em=new THREE.Mesh(new THREE.OctahedronGeometry(.34,0),
@@ -529,6 +541,20 @@ function updateStage2(dt,t){
     b.m.position.y=b.m.scale.y/2;
     b.m.material.emissiveIntensity=.15+b.n*.09;
   }
+  // the openings: pulsing floor pads, flaring white while the player stands
+  // in one; the wall segment beside a blocked opening glows too
+  const blk=s2BlockedGap();
+  for(const gp of S2.gapPads){
+    const inIt=blk===gp.g;
+    const guide=S2.round===2&&S2.done<3?.35*(.5+.5*Math.sin(t*4.5)):.06*(.5+.5*Math.sin(t*2));
+    gp.m.material.opacity=inIt?.95:.35+guide;
+    gp.m.material.color.setHex(inIt?0xffffff:0x8ffcff);
+  }
+  if(blk!==S2.lastBlk){
+    S2.lastBlk=blk;
+    if(blk!==0){blip(660,.18,.1,'sine');emitRipple(S2_BARX,blk*S2_GAPZ,.9);
+      if(S2.round===2&&S2.done<3)setPrompt('You are in the way. Now the lights have one door.');}
+  }
   if(S2.done>=3)return;
   // how well does the live shape match the ghost? (L1 between distributions)
   let m=0;
@@ -658,6 +684,13 @@ function updateSeeds(t){
  if(ct>=0){
    const a=foldedPoint(playerPos); a.y+=.18;
    const b=foldedPoint(seedData[ct].p); b.y+=.18;
+   guideLine.visible=true;
+   guideLine.geometry.setFromPoints([a,b]); guideLine.computeLineDistances();
+ }else if(S2.active&&S2.done<3&&S2.round===2&&s2BlockedGap()===0){
+   // round three: the light leads you to the nearest opening in the wall
+   const gz=playerPos.z>=0?S2_GAPZ:-S2_GAPZ;
+   const a=foldedPoint(playerPos); a.y+=.18;
+   const b=new THREE.Vector3(S2_BARX,.18,gz);
    guideLine.visible=true;
    guideLine.geometry.setFromPoints([a,b]); guideLine.computeLineDistances();
  }else guideLine.visible=false;
@@ -805,7 +838,7 @@ addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updat
 // why testability matters more than usual for this project)
 window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get seeds(){return seeds},get moves(){return moveCount},
   get s2(){return {active:S2.active,done:S2.done,round:S2.round,match:+S2.match.toFixed(2),hold:+S2.hold.toFixed(1),eyes:S2.eyes}},
-  s2start:startStage2};
+  s2start:startStage2,s2round:s2SetRound};
 </script>
 </body>
 </html>
