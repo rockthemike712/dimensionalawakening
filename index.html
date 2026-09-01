@@ -363,6 +363,7 @@ function foldedPoint(src){
 const S2={
   active:false,eyes:false,done:0,round:0,spawnT:0,startT:0,roundT:0,
   match:0,hold:0,hinted:false,arrived:false,eyeUsed:false,lastBlk:0,
+  celebT:-99,morphT:-99,prevTarget:null,markerPos:new THREE.Vector3(5.2,0,0),nearPrev:false,toneT:0,
   dots:[],bins:[],gapPads:[],center:new THREE.Vector3(6.6,0,0)
 };
 const S2_EMIT=new THREE.Vector3(3.0,0,0), S2_BARX=6.6, S2_SCRX=10.8;
@@ -433,8 +434,9 @@ function drawScreen(dt,t){
   splatCtx.fillRect(0,0,SCR_W,SCR_H);
   scrCtx.globalCompositeOperation='source-over';
   scrCtx.fillStyle='#04101a';scrCtx.fillRect(0,0,SCR_W,SCR_H);
-  if(S2.target&&S2.done<3){
+  if(S2.target&&(S2.done<3||t-S2.celebT<1.4)){
     const prog=Math.min(1,S2.hold/S2_HOLD), bw=SCR_W/S2_NB;
+    const mk=ease((t-S2.morphT)/1.1), tgt=S2.target.map((v,i)=>THREE.MathUtils.lerp(S2.prevTarget?S2.prevTarget[i]:v,v,mk));
     let mx=0;for(const b of S2.bins)mx=Math.max(mx,b.n);
     // your shape: filled bars piling up from the floor of the screen
     scrCtx.fillStyle=`rgba(70,220,255,${.4+.4*S2.match})`;
@@ -446,10 +448,16 @@ function drawScreen(dt,t){
     scrCtx.lineWidth=6;
     scrCtx.strokeStyle=`rgba(${160+95*prog|0},255,255,${.6+.35*S2.match+.15*prog*Math.sin(t*9)})`;
     scrCtx.beginPath();scrCtx.moveTo(0,SCR_BASE);
-    for(let i=0;i<S2_NB;i++){const h=SCR_TOP*S2.target[i];scrCtx.lineTo(i*bw,SCR_BASE-h);scrCtx.lineTo((i+1)*bw,SCR_BASE-h);}
+    for(let i=0;i<S2_NB;i++){const h=SCR_TOP*tgt[i];scrCtx.lineTo(i*bw,SCR_BASE-h);scrCtx.lineTo((i+1)*bw,SCR_BASE-h);}
     scrCtx.lineTo(SCR_W,SCR_BASE);scrCtx.stroke();
     scrCtx.fillStyle='rgba(255,255,255,.9)';
     scrCtx.fillRect(0,SCR_H-7,SCR_W*prog,7);
+    // the beat: the finished shape flashes white and a sweep runs across it
+    const c=(t-S2.celebT)/1.4;
+    if(c>=0&&c<1){
+      scrCtx.strokeStyle='rgba(255,255,255,.95)';scrCtx.lineWidth=9;scrCtx.stroke();
+      scrCtx.fillStyle=`rgba(255,255,255,${.7*(1-c)})`;scrCtx.fillRect(c*SCR_W-30,0,60,SCR_H);
+    }
   }
   scrCtx.globalCompositeOperation='lighter';
   scrCtx.drawImage(splatCv,0,0);
@@ -509,8 +517,14 @@ function buildStage2(){
     S2.dots.push({m,on:false,mode:'',t:0,gapZ:0,landZ:0,waveAt:0});
   }
 }
+function s2Reset(){
+  for(const b of S2.bins)b.n=0;
+  splatCtx.globalCompositeOperation='source-over';splatCtx.clearRect(0,0,SCR_W,SCR_H);
+  S2.match=0;S2.hold=0;
+}
 function s2SetRound(r){
   S2.round=r;S2.roundT=clock.elapsedTime;S2.hold=0;S2.hinted=false;
+  S2.prevTarget=S2.target||null;S2.morphT=clock.elapsedTime;
   const R=S2_ROUNDS[r];
   let mx=0;const tp=S2.bins.map(b=>{const v=R.profile(b.z);mx=Math.max(mx,v);return v;});
   S2.target=tp.map(v=>v/mx);
@@ -534,11 +548,13 @@ function s2Hit(z){
 }
 function s2RoundDone(){
   S2.done++;countEl.textContent=`PATTERNS ${S2.done} / 3`;setPips(S2.done);
+  S2.celebT=clock.elapsedTime;S2.hold=0;S2.match=0;
   pulseFlash();chime();
   for(let i=0;i<S2_NB;i+=6)emitRipple(S2_SCRX-.5,S2.bins[i].z,.5);
+  emitRipple(S2.markerPos.x,S2.markerPos.z,1.4);
   if(S2.done>=3){
-    setPrompt('End of prototype.');
-  }else s2SetRound(S2.done);
+    setTimeout(()=>setPrompt('End of prototype.'),1400);
+  }else setTimeout(()=>{s2Reset();s2SetRound(S2.done);},1400);
 }
 function updateStage2(dt,t){
   if(!S2.active)return;
@@ -547,7 +563,7 @@ function updateStage2(dt,t){
     S2.arrived=true;S2.roundT=t;setPrompt(S2_ROUNDS[S2.round].intro);
   }
   S2.spawnT-=dt;
-  if(S2.spawnT<=0){
+  if(S2.spawnT<=0&&t-S2.celebT>=1.4){
     S2.spawnT=.06;
     const d=S2.dots.find(d=>!d.on);
     if(d){
@@ -582,12 +598,15 @@ function updateStage2(dt,t){
   for(const b of S2.bins){b.n*=Math.exp(-dt*.4);total+=b.n;}
   if(S2.done<3){
     const sp=s2Spot(), on=s2OnSpot();
-    S2.marker.visible=true;S2.marker.position.x=sp.x;S2.marker.position.z=sp.z;
+    S2.markerPos.lerp(sp,1-Math.pow(.03,dt));
+    S2.marker.visible=true;S2.marker.position.x=S2.markerPos.x;S2.marker.position.z=S2.markerPos.z;
     S2.marker.scale.setScalar(on?1.15:1+.08*Math.sin(t*4));
     S2.mkRing.material.opacity=on?1:.55+.3*(.5+.5*Math.sin(t*4));
     S2.mkDisc.material.opacity=on?.5:.14;
     S2.mkRing.material.color.setHex(on?0xffffff:0xaefcff);
   }else S2.marker.visible=false;
+  const nearNow=s2NearSlits();
+  if(nearNow!==S2.nearPrev){S2.nearPrev=nearNow;if(S2.arrived&&S2.done<3)blip(nearNow?523:330,.3,.07,'sine');}
   const blk=s2BlockedGap();
   for(const gp of S2.gapPads){
     const inIt=blk===gp.g;
@@ -601,7 +620,7 @@ function updateStage2(dt,t){
       if(S2.round===2&&S2.done<3)setPrompt('Blocked.');}
   }
   drawScreen(dt,t);
-  if(S2.done>=3)return;
+  if(S2.done>=3||t-S2.celebT<1.4)return;
   let m=0;
   if(total>14){
     let tsum=0;for(const v of S2.target)tsum+=v;
@@ -610,6 +629,7 @@ function updateStage2(dt,t){
   }
   S2.match+=(m-S2.match)*(1-Math.pow(.05,dt));
   S2.hold=S2.match>S2_THRESH?S2.hold+dt:Math.max(0,S2.hold-dt*1.5);
+  if(S2.hold>0&&S2.match>S2_THRESH){S2.toneT-=dt;if(S2.toneT<=0){S2.toneT=.26;blip(440+560*Math.min(1,S2.hold/S2_HOLD),.1,.05,'triangle');}}
   if(S2.hold>=S2_HOLD)s2RoundDone();
   if(S2.arrived&&!S2.hinted&&t-S2.roundT>8&&S2.hold/S2_HOLD<.3){S2.hinted=true;setPrompt(S2_ROUNDS[S2.round].hint);}
 }
