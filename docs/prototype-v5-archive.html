@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>Dimensional Awakening — Fold Prototype</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#02030a;color:#eafcff;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  canvas{display:block;touch-action:none}
+  #ui{position:fixed;inset:0;pointer-events:none}
+  #title{position:absolute;top:18px;left:20px;font-size:12px;letter-spacing:.22em;text-transform:uppercase;opacity:.62}
+  #prompt{position:absolute;left:50%;bottom:24px;transform:translateX(-50%);padding:10px 16px;border:1px solid rgba(180,245,255,.18);border-radius:999px;background:rgba(1,5,14,.38);backdrop-filter:blur(10px);font-size:14px;white-space:nowrap;transition:.35s;box-shadow:0 0 28px rgba(0,230,255,.06)}
+  #count{position:absolute;top:18px;right:20px;font-size:13px;opacity:.68}
+  #foldHint{position:absolute;right:20px;bottom:24px;font-size:12px;opacity:.45;text-align:right;line-height:1.5}
+  #flash{position:absolute;inset:0;background:white;opacity:0;transition:opacity .15s}
+  #reticle{position:absolute;left:50%;top:50%;width:6px;height:6px;border-radius:50%;transform:translate(-50%,-50%);background:#dfffff;box-shadow:0 0 14px #77ffff;opacity:.55}
+  #moveHelp{position:absolute;left:20px;bottom:22px;display:flex;align-items:center;gap:12px;pointer-events:auto;transition:opacity .4s}
+  #moveHelp .label{font-size:11px;letter-spacing:.13em;text-transform:uppercase;opacity:.72;line-height:1.45}
+  #dpad{width:118px;height:118px;position:relative;filter:drop-shadow(0 0 18px rgba(80,245,255,.16))}
+  .dkey{position:absolute;-webkit-appearance:none;appearance:none;cursor:pointer;width:38px;height:38px;border:1px solid rgba(130,245,255,.32);background:rgba(3,18,30,.72);color:#dfffff;border-radius:10px;font:700 18px/1 system-ui;display:grid;place-items:center;user-select:none;-webkit-user-select:none;touch-action:none;box-shadow:inset 0 0 18px rgba(0,230,255,.05)}
+  .dkey:active,.dkey.active{background:rgba(45,220,255,.24);border-color:rgba(160,255,255,.8);box-shadow:0 0 20px rgba(80,245,255,.25)}
+  #up{left:40px;top:0}#left{left:0;top:40px}#down{left:40px;top:80px}#right{left:80px;top:40px}
+  #goalHint{position:absolute;left:50%;top:70px;transform:translateX(-50%);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#bffcff;text-shadow:0 0 14px #65f7ff;opacity:.88;transition:opacity .4s}
+  @media (max-width:700px){#foldHint{display:none}#prompt{font-size:12px;bottom:18px;max-width:60vw;white-space:normal;text-align:center}#title{font-size:10px}#moveHelp{left:12px;bottom:12px;gap:7px}#moveHelp .label{display:none}#dpad{transform:scale(.84);transform-origin:left bottom}#goalHint{top:48px;font-size:10px}}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div id="title">Dimensional Awakening / Fold Study</div>
+  <div id="count">SEEDS 0 / 3</div>
+  <div id="prompt">Use the arrows to move toward the beacon.</div>
+  <div id="goalHint">FIND THE BEACON</div>
+  <div id="moveStatus" style="position:absolute;left:50%;top:92px;transform:translateX(-50%);font:700 11px system-ui;color:#dfffff;opacity:.7;pointer-events:none">TAP AN ARROW</div>
+  <div id="beaconArrow" style="position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);font-size:34px;color:#bffcff;text-shadow:0 0 18px #65f7ff;pointer-events:none">↓</div>
+  <div id="moveHelp">
+    <div id="dpad">
+      <button class="dkey" id="up" type="button" onclick="tapMove(0,-1,this)">↑</button>
+      <button class="dkey" id="left" type="button" onclick="tapMove(-1,0,this)">←</button>
+      <button class="dkey" id="down" type="button" onclick="tapMove(0,1,this)">↓</button>
+      <button class="dkey" id="right" type="button" onclick="tapMove(1,0,this)">→</button>
+    </div>
+    <div class="label">MOVE<br>WASD / ARROWS<br>OR TAP THE PAD</div>
+  </div>
+  <div id="foldHint">MOVE · WASD / ARROWS<br>FOLD SPACE · DRAG THE CYAN SEAM</div>
+  <div id="reticle"></div>
+  <div id="flash"></div>
+</div>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.169.0/build/three.module.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const scene=new THREE.Scene();
+scene.fog=new THREE.FogExp2(0x030611,.042);
+const camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,.1,300);
+camera.position.set(0,11,14);
+function portraitMode(){return innerHeight>innerWidth*1.15;}
+function applyCameraMode(){camera.fov=portraitMode()?72:58;camera.updateProjectionMatrix();}
+applyCameraMode();
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.15;
+document.body.appendChild(renderer.domElement);
+
+const clock=new THREE.Clock();
+const world=new THREE.Group(); scene.add(world);
+
+// Core state
+let fold=0, foldTarget=0, dragging=false, dragStartX=0, dragStartFold=0;
+let playerPos=new THREE.Vector3(-7,0,-1);
+let velocity=new THREE.Vector3();
+let seeds=0, awakened=0, timeScale=1;
+const keys={};
+
+const prompt=document.getElementById('prompt');
+const count=document.getElementById('count');
+const flash=document.getElementById('flash');
+const moveHelp=document.getElementById('moveHelp');
+const goalHint=document.getElementById('goalHint');
+const beaconArrow=document.getElementById('beaconArrow');
+const moveStatus=document.getElementById('moveStatus');
+
+// Star field
+const starGeo=new THREE.BufferGeometry();
+const starCount=1200; const starPos=new Float32Array(starCount*3);
+for(let i=0;i<starCount;i++){const r=35+Math.random()*90,a=Math.random()*Math.PI*2,b=Math.acos(2*Math.random()-1);starPos[i*3]=Math.sin(b)*Math.cos(a)*r;starPos[i*3+1]=Math.cos(b)*r*.7;starPos[i*3+2]=Math.sin(b)*Math.sin(a)*r;}
+starGeo.setAttribute('position',new THREE.BufferAttribute(starPos,3));
+const stars=new THREE.Points(starGeo,new THREE.PointsMaterial({color:0x78dfff,size:.12,transparent:true,opacity:.42,depthWrite:false}));scene.add(stars);
+
+// Foldable plane shader. The x coordinate is reflected/raised around seam x=0.
+const planeGeo=new THREE.PlaneGeometry(24,18,120,90); planeGeo.rotateX(-Math.PI/2);
+const planeMat=new THREE.ShaderMaterial({
+  transparent:true, side:THREE.DoubleSide,
+  uniforms:{uTime:{value:0},uFold:{value:0},uAwake:{value:0}},
+  vertexShader:`
+    uniform float uTime; uniform float uFold; uniform float uAwake;
+    varying vec3 vPos; varying float vSide; varying float vWarp;
+    void main(){
+      vec3 p=position; float side=sign(p.x); float d=abs(p.x);
+      float theta=uFold*1.42; // ~81 degrees max
+      if(p.x>0.0){
+        float nx=cos(theta)*p.x; float ny=sin(theta)*p.x;
+        p.x=nx; p.y+=ny;
+      }
+      float ripple=sin(length(position.xz)*1.2-uTime*1.8)*.06*(.2+uAwake);
+      p.y+=ripple;
+      vPos=p; vSide=side; vWarp=ripple;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);
+    }`,
+  fragmentShader:`
+    uniform float uTime; uniform float uFold; uniform float uAwake;
+    varying vec3 vPos; varying float vSide; varying float vWarp;
+    float grid(float x,float s){float q=abs(fract(x/s-.5)-.5)/fwidth(x/s);return 1.-min(q,1.);}
+    void main(){
+      float g=max(grid(vPos.x,1.0),grid(vPos.z,1.0));
+      float fine=max(grid(vPos.x,.25),grid(vPos.z,.25))*.18;
+      vec3 a=vec3(.015,.055,.075); vec3 b=vec3(.02,.28,.34);
+      float pulse=.5+.5*sin(uTime*.7+vPos.x*.3-vPos.z*.22);
+      vec3 col=mix(a,b,g*.48+fine)+vec3(.03,.13,.15)*pulse*uAwake;
+      float edge=exp(-abs(vPos.x)*1.9)*uFold;
+      col+=vec3(.1,.9,1.2)*edge*.65;
+      gl_FragColor=vec4(col,.92);
+    }`
+});
+const plane=new THREE.Mesh(planeGeo,planeMat);world.add(plane);
+
+// Seam / draggable fold axis
+const seamMat=new THREE.MeshBasicMaterial({color:0x60f7ff,transparent:true,opacity:.9});
+const seam=new THREE.Mesh(new THREE.BoxGeometry(.07,.08,18),seamMat);seam.position.y=.06;world.add(seam);
+const seamHalo=new THREE.Mesh(new THREE.BoxGeometry(.3,.02,18),new THREE.MeshBasicMaterial({color:0x20d9ff,transparent:true,opacity:.09,blending:THREE.AdditiveBlending}));seamHalo.position.y=.04;world.add(seamHalo);
+
+// Player
+const pCore=new THREE.Mesh(new THREE.IcosahedronGeometry(.34,2),new THREE.MeshStandardMaterial({color:0xdfffff,emissive:0x49e9ff,emissiveIntensity:3,roughness:.18,metalness:.15}));
+const pHalo=new THREE.Mesh(new THREE.SphereGeometry(.58,24,24),new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.075,blending:THREE.AdditiveBlending,depthWrite:false}));
+const player=new THREE.Group();player.add(pCore,pHalo);world.add(player);
+
+scene.add(new THREE.HemisphereLight(0x8ceeff,0x04040c,1.3));
+const point=new THREE.PointLight(0x66f5ff,20,18);point.position.set(-4,6,2);scene.add(point);
+
+// Seeds
+const seedData=[
+ {p:new THREE.Vector3(-3,0,-1),requiresFold:false},
+ {p:new THREE.Vector3(7,0,4),requiresFold:true},
+ {p:new THREE.Vector3(3,0,-5),requiresFold:true}
+];
+const seedMeshes=[];
+let firstBeacon=null, guideLine=null;
+for(let i=0;i<seedData.length;i++){
+ const g=new THREE.Group();
+ const core=new THREE.Mesh(new THREE.OctahedronGeometry(.28,0),new THREE.MeshStandardMaterial({color:0xffffff,emissive:i===0?0x55ffff:0xff49f7,emissiveIntensity:4,roughness:.1}));
+ const ring=new THREE.Mesh(new THREE.TorusGeometry(.58,.035,8,64),new THREE.MeshBasicMaterial({color:i===0?0x62ffff:0xff64ff,transparent:true,opacity:.65}));ring.rotation.x=Math.PI/2;
+ g.add(core,ring);
+ if(i===0){
+   core.scale.setScalar(1.65); ring.scale.setScalar(1.35);
+   const beam=new THREE.Mesh(new THREE.CylinderGeometry(.12,.38,12,24,1,true),new THREE.MeshBasicMaterial({color:0x64f7ff,transparent:true,opacity:.18,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+   beam.position.y=5.9; g.add(beam); firstBeacon=beam;
+   const glow=new THREE.PointLight(0x6cffff,34,14);glow.position.y=1.4;g.add(glow);
+ }
+ g.position.copy(seedData[i].p);g.position.y=.5;world.add(g);seedMeshes.push(g);
+}
+const guideMat=new THREE.LineDashedMaterial({color:0x73faff,transparent:true,opacity:.72,dashSize:.35,gapSize:.22});
+const guideGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3(1,0,0)]);
+guideLine=new THREE.Line(guideGeo,guideMat);guideLine.computeLineDistances();world.add(guideLine);
+
+// Geometry landmarks
+for(let i=0;i<18;i++){
+ const x=-10+Math.random()*20,z=-7+Math.random()*14;
+ if(Math.abs(x)<1) continue;
+ const h=.3+Math.random()*1.6;
+ const m=new THREE.Mesh(new THREE.CylinderGeometry(.07,.16,h,5),new THREE.MeshStandardMaterial({color:0x16384a,emissive:0x0b2330,emissiveIntensity:.6,roughness:.72,metalness:.3}));
+ m.position.set(x,h/2,z);world.add(m);
+}
+
+function foldedPoint(src){
+  // render-space mapping matches plane fold: right half rotates upward around z axis
+  const p=src.clone();
+  if(p.x>0){const th=fold*1.42,x=p.x;p.x=Math.cos(th)*x;p.y+=Math.sin(th)*x;}
+  return p;
+}
+
+function setPrompt(t){if(prompt.textContent!==t){prompt.style.opacity=.15;setTimeout(()=>{prompt.textContent=t;prompt.style.opacity=1},180)}}
+function pulseFlash(){flash.style.opacity=.5;setTimeout(()=>flash.style.opacity=0,80)}
+
+function collectSeed(i){
+ if(seedData[i].taken)return;
+ seedData[i].taken=true; seeds++; count.textContent=`SEEDS ${seeds} / 3`;
+ seedMeshes[i].visible=false; pulseFlash();
+ awakened=Math.min(1,awakened+.34); planeMat.uniforms.uAwake.value=awakened;
+ if(seeds===1){moveStatus.style.opacity=0;moveHelp.style.opacity=.35;goalHint.style.opacity=0;beaconArrow.style.opacity=0;guideLine.visible=false;setPrompt('Nice. Now drag the glowing cyan seam to fold space.'); foldTarget=.15;}
+ if(seeds===2){setPrompt('Distance was only a rule. Find what changed.');}
+ if(seeds===3){setPrompt('You were never moving through space.'); setTimeout(()=>setPrompt('You were changing what space meant.'),3000);}
+}
+
+function updatePlayer(dt){
+ let dx=(keys['KeyD']||keys['ArrowRight']?1:0)-(keys['KeyA']||keys['ArrowLeft']?1:0);
+ let dz=(keys['KeyS']||keys['ArrowDown']?1:0)-(keys['KeyW']||keys['ArrowUp']?1:0);
+ const dir=new THREE.Vector3(dx,0,dz);if(dir.lengthSq()>0)dir.normalize();
+ const speed=portraitMode()?7.0*(1+awakened*.12):4.2*(1+awakened*.12);
+ velocity.lerp(dir.multiplyScalar(speed),1-Math.pow(.001,dt));
+ playerPos.addScaledVector(velocity,dt);
+ if((Math.abs(dx)+Math.abs(dz))>0 && seeds===0) prompt.textContent='Good — keep moving toward the arrow.';
+ playerPos.x=THREE.MathUtils.clamp(playerPos.x,-11,11);playerPos.z=THREE.MathUtils.clamp(playerPos.z,-8,8);
+
+ // Simple fold traversal: when the fold is strong, the seam connects two distant x locations.
+ if(fold>.68 && Math.abs(playerPos.x)<.34 && Math.abs(velocity.x)>.2){
+   const sign=velocity.x>0?1:-1;
+   playerPos.x=sign>0?7.2:-7.2;
+   playerPos.z*=-.72;
+   velocity.multiplyScalar(.55);
+   pulseFlash();
+   awakened=Math.min(1,awakened+.1);planeMat.uniforms.uAwake.value=awakened;
+   camera.fov=58+awakened*10;camera.updateProjectionMatrix();
+ }
+ const rp=foldedPoint(playerPos);player.position.copy(rp);player.position.y+=.45; if(portraitMode()) player.scale.setScalar(2.15); else player.scale.setScalar(1);
+ player.rotation.y+=dt*(.7+awakened*1.8);pHalo.scale.setScalar(1+.08*Math.sin(performance.now()*.004));
+}
+
+function updateSeeds(t){
+ if(seeds===0){
+   const a=foldedPoint(playerPos); a.y=.18;
+   const b=foldedPoint(seedData[0].p); b.y=.18;
+   guideLine.geometry.setFromPoints([a,b]); guideLine.computeLineDistances();
+   guideLine.material.dashOffset=-t*.8;
+   if(firstBeacon){firstBeacon.material.opacity=.13+.10*(.5+.5*Math.sin(t*3.2)); firstBeacon.scale.x=firstBeacon.scale.z=1+.08*Math.sin(t*2.4);}
+ }
+ seedMeshes.forEach((g,i)=>{
+   if(seedData[i].taken)return;
+   const rp=foldedPoint(seedData[i].p);g.position.copy(rp);g.position.y+=.5+.12*Math.sin(t*2.1+i);
+   g.rotation.y=t*(.5+i*.14);g.children[1].rotation.z=t*(.25+i*.11);
+   const pp=foldedPoint(playerPos);
+   if(pp.distanceTo(g.position)<.7){
+      if(!seedData[i].requiresFold || fold>.55 || i===2)collectSeed(i);
+   }
+ });
+}
+
+function animate(){
+ requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.033)*timeScale,t=clock.elapsedTime;
+ fold+=(foldTarget-fold)*(1-Math.pow(.0001,dt));
+ planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;
+ seamMat.opacity=.62+.3*Math.sin(t*3.1);seamHalo.material.opacity=.05+.05*Math.sin(t*2.2);
+ updatePlayer(dt);updateSeeds(t);
+ if(seeds===0){
+   const bp=foldedPoint(seedData[0].p);bp.y=1.0;bp.project(camera);
+   const sx=(bp.x*.5+.5)*innerWidth, sy=(-bp.y*.5+.5)*innerHeight;
+   const cx=innerWidth*.5, cy=innerHeight*.42;
+   const ang=Math.atan2(sy-cy,sx-cx)*180/Math.PI+90;
+   beaconArrow.style.left=Math.max(42,Math.min(innerWidth-42,sx))+'px';
+   beaconArrow.style.top=Math.max(105,Math.min(innerHeight-180,sy))+'px';
+   beaconArrow.style.transform='translate(-50%,-50%) rotate('+ang+'deg)';
+ }
+ stars.rotation.y=t*.005*(1+awakened*3);
+ // Camera increasingly refuses Euclidean stability.
+ const wob=awakened*.25;
+ const target=foldedPoint(playerPos);target.y=0;
+ if(portraitMode()){
+   // During onboarding the camera is intentionally locked. Movement must be visually undeniable.
+   let focus;
+   if(seeds===0){
+     const start=new THREE.Vector3(-7,0,-1), goal=foldedPoint(seedData[0].p);
+     focus=start.clone().lerp(goal,.5);
+   }else{ focus=target.clone(); }
+   camera.position.set(focus.x + Math.sin(t*.27)*wob, 14.5 + Math.sin(t*.31)*wob, focus.z + 8.2 + Math.cos(t*.21)*wob);
+   camera.lookAt(focus.x,0,focus.z-.7);
+ }else{
+   camera.position.x=target.x*.15 + Math.sin(t*.27)*wob;
+   camera.position.z=14+target.z*.12 + Math.cos(t*.21)*wob;
+   camera.position.y=11+Math.sin(t*.31)*wob;
+   camera.lookAt(target.x*.25,0,target.z*.2);
+ }
+ renderer.render(scene,camera);
+}
+animate();
+
+addEventListener('keydown',e=>{keys[e.code]=true;if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();});
+addEventListener('keyup',e=>keys[e.code]=false);
+
+function stepMove(k, amount=1.15){
+  if(k==='KeyW') playerPos.z-=amount;
+  if(k==='KeyS') playerPos.z+=amount;
+  if(k==='KeyA') playerPos.x-=amount;
+  if(k==='KeyD') playerPos.x+=amount;
+  playerPos.x=THREE.MathUtils.clamp(playerPos.x,-11,11);
+  playerPos.z=THREE.MathUtils.clamp(playerPos.z,-8,8);
+}
+
+let tapCount=0;
+function tapMove(dx,dz,btn){
+  // Deliberately simple: one browser click = one world-space move.
+  playerPos.x=THREE.MathUtils.clamp(playerPos.x+dx*1.45,-11,11);
+  playerPos.z=THREE.MathUtils.clamp(playerPos.z+dz*1.45,-8,8);
+  velocity.set(0,0,0);
+  tapCount++;
+  moveStatus.textContent='MOVEMENT '+tapCount+' ✓';
+  prompt.textContent='Movement works — follow the arrow.';
+  if(btn){btn.style.transform='scale(.86)';setTimeout(()=>btn.style.transform='',90);}
+  pulseFlash();
+  return false;
+}
+
+// Prevent the file viewer from interpreting long presses on the controls.
+document.querySelectorAll('.dkey').forEach(btn=>{
+  btn.addEventListener('contextmenu',e=>e.preventDefault());
+  btn.addEventListener('touchstart',e=>e.stopPropagation(),{passive:true});
+});
+
+renderer.domElement.addEventListener('pointerdown',e=>{dragging=true;dragStartX=e.clientX;dragStartFold=foldTarget;renderer.domElement.setPointerCapture(e.pointerId);});
+renderer.domElement.addEventListener('pointermove',e=>{if(!dragging)return;const delta=(dragStartX-e.clientX)/Math.max(innerWidth*.38,260);foldTarget=THREE.MathUtils.clamp(dragStartFold+delta,0,1);if(foldTarget>.35&&seeds===1)setPrompt('Keep folding. Make two places become one.');});
+renderer.domElement.addEventListener('pointerup',e=>{dragging=false;renderer.domElement.releasePointerCapture(e.pointerId);});
+
+// Mobile movement is handled exclusively by the visible D-pad.
+
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;applyCameraMode();renderer.setSize(innerWidth,innerHeight)});
+</script>
+</body>
+</html>

@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%2350f2ff%22/></svg>" />
+<title>Dimensional Awakening — Fold Prototype V6</title>
+<style>
+  * { box-sizing:border-box; }
+  html,body{margin:0;height:100%;overflow:hidden;background:#02030a;color:#eafcff;
+    font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-user-select:none;user-select:none;overscroll-behavior:none;touch-action:none}
+  canvas{display:block;touch-action:none}
+  #ui{position:fixed;inset:0;pointer-events:none}
+  #title{position:absolute;top:max(16px,env(safe-area-inset-top));left:20px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;opacity:.6}
+  #count{position:absolute;top:max(16px,env(safe-area-inset-top));right:20px;font-size:12px;opacity:.68;letter-spacing:.12em}
+  #prompt{position:absolute;left:50%;bottom:calc(max(16px,env(safe-area-inset-bottom)) + 170px);transform:translateX(-50%);
+    padding:10px 16px;border:1px solid rgba(180,245,255,.18);border-radius:999px;background:rgba(1,5,14,.5);
+    backdrop-filter:blur(10px);font-size:14px;max-width:78vw;text-align:center;transition:opacity .35s;
+    box-shadow:0 0 28px rgba(0,230,255,.06)}
+  #moveStatus{position:absolute;left:50%;top:calc(max(16px,env(safe-area-inset-top)) + 34px);transform:translateX(-50%);
+    font:700 12px ui-monospace,monospace;color:#dfffff;opacity:.75;letter-spacing:.1em;transition:opacity .6s}
+  #beaconArrow{position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);font-size:34px;color:#bffcff;
+    text-shadow:0 0 18px #65f7ff;transition:opacity .4s}
+  #flash{position:absolute;inset:0;background:white;opacity:0;transition:opacity .18s}
+  #dpad{position:absolute;left:max(14px,env(safe-area-inset-left));bottom:max(14px,env(safe-area-inset-bottom));
+    width:150px;height:150px;pointer-events:auto;filter:drop-shadow(0 0 18px rgba(80,245,255,.16));transition:opacity .5s}
+  .dkey{position:absolute;-webkit-appearance:none;appearance:none;width:48px;height:48px;
+    border:1px solid rgba(130,245,255,.32);background:rgba(3,18,30,.72);color:#dfffff;border-radius:12px;
+    font:700 20px/1 system-ui;display:grid;place-items:center;touch-action:none;cursor:pointer;
+    box-shadow:inset 0 0 18px rgba(0,230,255,.05)}
+  .dkey.held{background:rgba(45,220,255,.3);border-color:rgba(160,255,255,.85);box-shadow:0 0 20px rgba(80,245,255,.3)}
+  #up{left:51px;top:0}#left{left:0;top:51px}#down{left:51px;top:102px}#right{left:102px;top:51px}
+  #foldHint{position:absolute;right:20px;bottom:max(18px,env(safe-area-inset-bottom));font-size:11px;opacity:.45;text-align:right;line-height:1.6;letter-spacing:.06em}
+  @media (max-width:700px){
+    #foldHint{display:none}
+    #prompt{font-size:12px;bottom:calc(max(14px,env(safe-area-inset-bottom)) + 162px)}
+    #title{font-size:9px}
+  }
+</style>
+</head>
+<body>
+<div id="ui">
+  <div id="title">Dimensional Awakening / Fold Study V6</div>
+  <div id="count">SEEDS 0 / 3</div>
+  <div id="moveStatus">TAP AN ARROW TO MOVE</div>
+  <div id="beaconArrow">&#8595;</div>
+  <div id="prompt">Move toward the beacon.</div>
+  <div id="foldHint">MOVE &middot; WASD / ARROWS / PAD<br>FOLD SPACE &middot; GRAB THE CYAN SEAM</div>
+  <div id="dpad">
+    <button class="dkey" id="up">&#8593;</button>
+    <button class="dkey" id="left">&#8592;</button>
+    <button class="dkey" id="down">&#8595;</button>
+    <button class="dkey" id="right">&#8594;</button>
+  </div>
+  <div id="flash"></div>
+</div>
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.min.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ---------- renderer / scene ----------
+const scene=new THREE.Scene();
+scene.fog=new THREE.FogExp2(0x030611,.042);
+const camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,.1,300);
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.15;
+document.body.appendChild(renderer.domElement);
+const clock=new THREE.Clock();
+const world=new THREE.Group(); scene.add(world);
+
+function portraitMode(){return innerHeight>innerWidth*1.15;}
+
+// ---------- state ----------
+const FOLD_OPEN=0.68;          // fold amount at which the seam becomes crossable
+let fold=0, foldTarget=0;
+let dragging=false, dragStartX=0, dragStartFold=0;
+const playerPos=new THREE.Vector3(-7,0,-1);
+const velocity=new THREE.Vector3();
+let seeds=0, awakened=0, moveCount=0;
+const keys={};
+const held={x:0,z:0};          // d-pad hold state
+
+const promptEl=document.getElementById('prompt');
+const countEl=document.getElementById('count');
+const flashEl=document.getElementById('flash');
+const dpadEl=document.getElementById('dpad');
+const beaconArrow=document.getElementById('beaconArrow');
+const moveStatus=document.getElementById('moveStatus');
+
+// ---------- audio (unlocked by first gesture) ----------
+let AC=null, foldOsc=null, foldGain=null;
+function audio(){
+  if(AC) return AC;
+  try{
+    AC=new (window.AudioContext||window.webkitAudioContext)();
+    foldOsc=AC.createOscillator(); foldGain=AC.createGain();
+    foldOsc.type='sine'; foldOsc.frequency.value=52; foldGain.gain.value=0;
+    foldOsc.connect(foldGain).connect(AC.destination); foldOsc.start();
+  }catch(e){}
+  return AC;
+}
+function blip(freq,dur=.09,gain=.12,type='triangle'){
+  const ac=audio(); if(!ac) return;
+  const o=ac.createOscillator(), g=ac.createGain();
+  o.type=type; o.frequency.value=freq;
+  g.gain.setValueAtTime(gain,ac.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+dur);
+  o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime+dur);
+}
+function chime(){[523,659,784,1046].forEach((f,i)=>setTimeout(()=>blip(f,.35,.09,'sine'),i*70));}
+
+// ---------- starfield ----------
+{
+  const n=1200, pos=new Float32Array(n*3);
+  for(let i=0;i<n;i++){const r=35+Math.random()*90,a=Math.random()*Math.PI*2,b=Math.acos(2*Math.random()-1);
+    pos[i*3]=Math.sin(b)*Math.cos(a)*r;pos[i*3+1]=Math.cos(b)*r*.7;pos[i*3+2]=Math.sin(b)*Math.sin(a)*r;}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  const stars=new THREE.Points(g,new THREE.PointsMaterial({color:0x78dfff,size:.12,transparent:true,opacity:.42,depthWrite:false}));
+  scene.add(stars); scene.userData.stars=stars;
+}
+
+// ---------- foldable plane ----------
+const planeGeo=new THREE.PlaneGeometry(24,18,120,90); planeGeo.rotateX(-Math.PI/2);
+const planeMat=new THREE.ShaderMaterial({
+  transparent:true, side:THREE.DoubleSide,
+  uniforms:{uTime:{value:0},uFold:{value:0},uAwake:{value:0}},
+  vertexShader:`
+    uniform float uTime; uniform float uFold; uniform float uAwake;
+    varying vec3 vPos;
+    void main(){
+      vec3 p=position;
+      float theta=uFold*1.42;
+      if(p.x>0.0){ float x=p.x; p.x=cos(theta)*x; p.y+=sin(theta)*x; }
+      p.y+=sin(length(position.xz)*1.2-uTime*1.8)*.06*(.2+uAwake);
+      vPos=p;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);
+    }`,
+  fragmentShader:`
+    uniform float uTime; uniform float uFold; uniform float uAwake;
+    varying vec3 vPos;
+    float grid(float x,float s){float q=abs(fract(x/s-.5)-.5)/fwidth(x/s);return 1.-min(q,1.);}
+    void main(){
+      float g=max(grid(vPos.x,1.0),grid(vPos.z,1.0));
+      float fine=max(grid(vPos.x,.25),grid(vPos.z,.25))*.18;
+      vec3 a=vec3(.015,.055,.075); vec3 b=vec3(.02,.28,.34);
+      float pulse=.5+.5*sin(uTime*.7+vPos.x*.3-vPos.z*.22);
+      vec3 col=mix(a,b,g*.48+fine)+vec3(.03,.13,.15)*pulse*uAwake;
+      col+=vec3(.1,.9,1.2)*exp(-abs(vPos.x)*1.9)*uFold*.65;
+      gl_FragColor=vec4(col,.92);
+    }`
+});
+world.add(new THREE.Mesh(planeGeo,planeMat));
+
+// ---------- seam: barrier, grab handle, crossing point ----------
+const seamMat=new THREE.MeshBasicMaterial({color:0x60f7ff,transparent:true,opacity:.9});
+const seam=new THREE.Mesh(new THREE.BoxGeometry(.07,.08,18),seamMat);seam.position.y=.06;world.add(seam);
+const seamHalo=new THREE.Mesh(new THREE.BoxGeometry(.3,.02,18),
+  new THREE.MeshBasicMaterial({color:0x20d9ff,transparent:true,opacity:.09,blending:THREE.AdditiveBlending}));
+seamHalo.position.y=.04;world.add(seamHalo);
+// The seam is a wall of light while unfolded — the obstacle that motivates folding.
+const seamWall=new THREE.Mesh(new THREE.PlaneGeometry(18,2.6),
+  new THREE.MeshBasicMaterial({color:0x2ee9ff,transparent:true,opacity:.14,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false}));
+seamWall.rotation.y=Math.PI/2; seamWall.position.y=1.3; world.add(seamWall);
+// Invisible fat collider so grabbing the seam is forgiving on a phone.
+const seamGrab=new THREE.Mesh(new THREE.BoxGeometry(3.2,5,18),new THREE.MeshBasicMaterial({visible:false}));
+seamGrab.position.y=1; world.add(seamGrab);
+
+// ---------- player ----------
+const pCore=new THREE.Mesh(new THREE.IcosahedronGeometry(.34,2),
+  new THREE.MeshStandardMaterial({color:0xdfffff,emissive:0x49e9ff,emissiveIntensity:3,roughness:.18,metalness:.15}));
+const pHalo=new THREE.Mesh(new THREE.SphereGeometry(.58,24,24),
+  new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.075,blending:THREE.AdditiveBlending,depthWrite:false}));
+const player=new THREE.Group();player.add(pCore,pHalo);world.add(player);
+
+scene.add(new THREE.HemisphereLight(0x8ceeff,0x04040c,1.3));
+const point=new THREE.PointLight(0x66f5ff,20,18);point.position.set(-4,6,2);scene.add(point);
+
+// ---------- seeds ----------
+const seedData=[
+ {p:new THREE.Vector3(-3,0,-1)},   // teaches movement (same side as player)
+ {p:new THREE.Vector3(7,0,4)},     // beyond the seam — requires folding across
+ {p:new THREE.Vector3(3,0,-5)}     // beyond the seam
+];
+const seedMeshes=[]; let firstBeacon=null;
+seedData.forEach((s,i)=>{
+ const g=new THREE.Group();
+ const core=new THREE.Mesh(new THREE.OctahedronGeometry(.28,0),
+   new THREE.MeshStandardMaterial({color:0xffffff,emissive:i===0?0x55ffff:0xff49f7,emissiveIntensity:4,roughness:.1}));
+ const ring=new THREE.Mesh(new THREE.TorusGeometry(.58,.035,8,64),
+   new THREE.MeshBasicMaterial({color:i===0?0x62ffff:0xff64ff,transparent:true,opacity:.65}));
+ ring.rotation.x=Math.PI/2; g.add(core,ring);
+ if(i===0){
+   core.scale.setScalar(1.65); ring.scale.setScalar(1.35);
+   const beam=new THREE.Mesh(new THREE.CylinderGeometry(.12,.38,12,24,1,true),
+     new THREE.MeshBasicMaterial({color:0x64f7ff,transparent:true,opacity:.18,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+   beam.position.y=5.9; g.add(beam); firstBeacon=beam;
+   const glow=new THREE.PointLight(0x6cffff,34,14);glow.position.y=1.4;g.add(glow);
+ }
+ g.position.copy(s.p);g.position.y=.5;world.add(g);seedMeshes.push(g);
+});
+const guideLine=new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3(1,0,0)]),
+  new THREE.LineDashedMaterial({color:0x73faff,transparent:true,opacity:.72,dashSize:.35,gapSize:.22}));
+guideLine.computeLineDistances();world.add(guideLine);
+
+// landmarks so motion is visually undeniable
+for(let i=0;i<18;i++){
+ const x=-10+Math.random()*20,z=-7+Math.random()*14;
+ if(Math.abs(x)<1.6) continue;
+ const h=.3+Math.random()*1.6;
+ const m=new THREE.Mesh(new THREE.CylinderGeometry(.07,.16,h,5),
+   new THREE.MeshStandardMaterial({color:0x16384a,emissive:0x0b2330,emissiveIntensity:.6,roughness:.72,metalness:.3}));
+ m.position.set(x,h/2,z);world.add(m);
+}
+
+// map logical (unfolded) coordinates to render space under the current fold
+function foldedPoint(src){
+  const p=src.clone();
+  if(p.x>0){const th=fold*1.42,x=p.x;p.x=Math.cos(th)*x;p.y+=Math.sin(th)*x;}
+  return p;
+}
+
+function setPrompt(t){if(promptEl.textContent!==t){promptEl.style.opacity=.15;
+  setTimeout(()=>{promptEl.textContent=t;promptEl.style.opacity=1},180)}}
+function pulseFlash(){flashEl.style.opacity=.5;setTimeout(()=>flashEl.style.opacity=0,90)}
+
+function collectSeed(i){
+ if(seedData[i].taken)return;
+ seedData[i].taken=true; seeds++; countEl.textContent=`SEEDS ${seeds} / 3`;
+ seedMeshes[i].visible=false; pulseFlash(); chime();
+ awakened=Math.min(1,awakened+.34); planeMat.uniforms.uAwake.value=awakened;
+ if(seeds===1){
+   beaconArrow.style.opacity=0; guideLine.visible=false; moveStatus.style.opacity=0;
+   foldTarget=.15; // the world twitches: a hint that the seam is now alive
+   setPrompt('The wall of light will not let you pass. Grab the glowing seam and pull.');
+ }
+ if(seeds===2){setPrompt('Distance was only a rule. One seed remains.');}
+ if(seeds===3){
+   setPrompt('You were never moving through space.');
+   setTimeout(()=>setPrompt('You were changing what space meant.'),3200);
+   setTimeout(()=>setPrompt('DIMENSIONAL AWAKENING'),7000);
+ }
+}
+
+// ---------- movement ----------
+function updatePlayer(dt){
+ let dx=(keys['KeyD']||keys['ArrowRight']?1:0)-(keys['KeyA']||keys['ArrowLeft']?1:0)+held.x;
+ let dz=(keys['KeyS']||keys['ArrowDown']?1:0)-(keys['KeyW']||keys['ArrowUp']?1:0)+held.z;
+ dx=THREE.MathUtils.clamp(dx,-1,1); dz=THREE.MathUtils.clamp(dz,-1,1);
+ const dir=new THREE.Vector3(dx,0,dz);if(dir.lengthSq()>0)dir.normalize();
+ const speed=(portraitMode()?6.4:4.6)*(1+awakened*.12);
+ velocity.lerp(dir.multiplyScalar(speed),1-Math.pow(.001,dt));
+ const prevX=playerPos.x;
+ playerPos.addScaledVector(velocity,dt);
+ playerPos.x=THREE.MathUtils.clamp(playerPos.x,-11,11);
+ playerPos.z=THREE.MathUtils.clamp(playerPos.z,-8,8);
+
+ const crossed=Math.sign(prevX)!==Math.sign(playerPos.x)&&Math.abs(prevX)>1e-4;
+ if(crossed||Math.abs(playerPos.x)<.34){
+   if(fold>FOLD_OPEN&&Math.abs(velocity.x)>.2){
+     // the fold joins the two halves: crossing the seam is a jump across space
+     const sign=velocity.x>0?1:-1;
+     playerPos.x=sign>0?7.2:-7.2;
+     playerPos.z*=-.72;
+     velocity.multiplyScalar(.55);
+     pulseFlash(); blip(196,.4,.15,'sine'); blip(392,.5,.1,'sine');
+     awakened=Math.min(1,awakened+.1);planeMat.uniforms.uAwake.value=awakened;
+     if(seeds>=1) setPrompt('Two distant places just touched. Keep going.');
+   }else{
+     // unfolded: the seam is a wall — push back toward the side the player came from
+     const from=prevX<0?-1:1;
+     playerPos.x=from<0?Math.min(playerPos.x,-.45):Math.max(playerPos.x,.45);
+     if(prevX!==playerPos.x&&Math.abs(velocity.x)>1)velocity.x*=-.25;
+     if(seeds>=1&&fold<FOLD_OPEN)setPrompt('The wall of light will not let you pass. Grab the seam and pull.');
+   }
+ }
+ const rp=foldedPoint(playerPos);player.position.copy(rp);player.position.y+=.45;
+ player.scale.setScalar(portraitMode()?1.7:1);
+ player.rotation.y+=dt*(.7+awakened*1.8);
+ pHalo.scale.setScalar(1+.08*Math.sin(performance.now()*.004));
+}
+
+function updateSeeds(t){
+ if(seeds===0){
+   const a=foldedPoint(playerPos); a.y=.18;
+   const b=foldedPoint(seedData[0].p); b.y=.18;
+   guideLine.geometry.setFromPoints([a,b]); guideLine.computeLineDistances();
+   if(firstBeacon){firstBeacon.material.opacity=.13+.10*(.5+.5*Math.sin(t*3.2));}
+ }
+ seedMeshes.forEach((g,i)=>{
+   if(seedData[i].taken)return;
+   const rp=foldedPoint(seedData[i].p);g.position.copy(rp);g.position.y+=.5+.12*Math.sin(t*2.1+i);
+   g.rotation.y=t*(.5+i*.14);g.children[1].rotation.z=t*(.25+i*.11);
+   if(foldedPoint(playerPos).distanceTo(g.position)<.8)collectSeed(i);
+ });
+}
+
+// ---------- d-pad: pointer-based, immediate step + hold to keep moving ----------
+function bindPad(id,ax,val){
+  const b=document.getElementById(id);
+  const press=e=>{
+    e.preventDefault();
+    if(b.setPointerCapture&&e.pointerId!==undefined)try{b.setPointerCapture(e.pointerId)}catch(_){}
+    held[ax]=val; b.classList.add('held');
+    // velocity impulse so even the shortest tap yields a clearly visible glide,
+    // and all movement passes through the seam barrier/crossing logic
+    if(ax==='x')velocity.x+=val*10; else velocity.z+=val*10;
+    moveCount++;
+    if(moveCount<=6){moveStatus.textContent='MOVEMENT '+moveCount+' ✓';}
+    else moveStatus.style.opacity=0;
+    blip(340+moveCount*22,.06,.07);
+    audio();
+  };
+  const release=()=>{held[ax]=0;b.classList.remove('held');};
+  b.addEventListener('pointerdown',press);
+  b.addEventListener('pointerup',release);
+  b.addEventListener('pointercancel',release);
+  b.addEventListener('lostpointercapture',release);
+  b.addEventListener('contextmenu',e=>e.preventDefault());
+}
+bindPad('up','z',-1);bindPad('down','z',1);bindPad('left','x',-1);bindPad('right','x',1);
+
+addEventListener('keydown',e=>{keys[e.code]=true;audio();
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();});
+addEventListener('keyup',e=>keys[e.code]=false);
+
+// ---------- fold drag: only when the pointer actually grabs the seam ----------
+const raycaster=new THREE.Raycaster(), ndc=new THREE.Vector2();
+renderer.domElement.addEventListener('pointerdown',e=>{
+  if(seeds<1)return; // folding unlocks after the first seed
+  ndc.set((e.clientX/innerWidth)*2-1,-(e.clientY/innerHeight)*2+1);
+  raycaster.setFromCamera(ndc,camera);
+  if(raycaster.intersectObject(seamGrab).length>0){
+    dragging=true;dragStartX=e.clientX;dragStartFold=foldTarget;
+    renderer.domElement.setPointerCapture(e.pointerId);
+    audio();
+  }
+});
+renderer.domElement.addEventListener('pointermove',e=>{
+  if(!dragging)return;
+  const delta=(dragStartX-e.clientX)/Math.max(innerWidth*.38,260);
+  foldTarget=THREE.MathUtils.clamp(dragStartFold+delta,0,1);
+  if(foldTarget>.35&&seeds>=1&&fold<FOLD_OPEN)setPrompt('Keep folding. Make two places become one.');
+  if(foldTarget>FOLD_OPEN&&seeds>=1)setPrompt('The halves are touching. Walk into the seam.');
+});
+const endDrag=e=>{if(dragging){dragging=false;try{renderer.domElement.releasePointerCapture(e.pointerId)}catch(_){}}};
+renderer.domElement.addEventListener('pointerup',endDrag);
+renderer.domElement.addEventListener('pointercancel',endDrag);
+
+// ---------- main loop ----------
+function animate(){
+ requestAnimationFrame(animate);
+ const dt=Math.min(clock.getDelta(),.033),t=clock.elapsedTime;
+ fold+=(foldTarget-fold)*(1-Math.pow(.0001,dt));
+ planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;
+ seamMat.opacity=.62+.3*Math.sin(t*3.1);
+ seamHalo.material.opacity=.05+.05*Math.sin(t*2.2);
+ seamWall.material.opacity=Math.max(0,.16*(1-fold/FOLD_OPEN))+.02;
+ if(foldGain)foldGain.gain.value=fold*.06;
+ if(foldOsc)foldOsc.frequency.value=52+fold*40;
+ updatePlayer(dt);updateSeeds(t);
+
+ if(seeds===0){
+   const bp=foldedPoint(seedData[0].p);bp.y=1.0;bp.project(camera);
+   const sx=(bp.x*.5+.5)*innerWidth, sy=(-bp.y*.5+.5)*innerHeight;
+   const ang=Math.atan2(sy-innerHeight*.42,sx-innerWidth*.5)*180/Math.PI+90;
+   beaconArrow.style.left=Math.max(42,Math.min(innerWidth-42,sx))+'px';
+   beaconArrow.style.top=Math.max(105,Math.min(innerHeight-200,sy))+'px';
+   beaconArrow.style.transform='translate(-50%,-50%) rotate('+ang+'deg)';
+ }
+ scene.userData.stars.rotation.y=t*.005*(1+awakened*3);
+
+ const wob=awakened*.25;
+ const target=foldedPoint(playerPos);target.y=0;
+ if(portraitMode()){
+   // Onboarding: fixed frame containing both player and first beacon so
+   // movement is visually undeniable. Afterwards: follow the player.
+   let focus;
+   if(seeds===0){focus=playerPos.clone().lerp(seedData[0].p,.5);focus=foldedPoint(focus);}
+   else focus=target.clone();
+   camera.fov=72;camera.updateProjectionMatrix();
+   camera.position.set(focus.x+Math.sin(t*.27)*wob,14.5+Math.sin(t*.31)*wob,focus.z+8.2+Math.cos(t*.21)*wob);
+   camera.lookAt(focus.x,0,focus.z-.7);
+ }else{
+   camera.fov=58+awakened*8;camera.updateProjectionMatrix();
+   camera.position.x=target.x*.15+Math.sin(t*.27)*wob;
+   camera.position.z=14+target.z*.12+Math.cos(t*.21)*wob;
+   camera.position.y=11+Math.sin(t*.31)*wob;
+   camera.lookAt(target.x*.25,0,target.z*.2);
+ }
+ renderer.render(scene,camera);
+}
+animate();
+
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+// read-only state hook for automated smoke tests (see docs/HANDOFF.md §18 on
+// why testability matters more than usual for this project)
+window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get seeds(){return seeds},get moves(){return moveCount}};
+</script>
+</body>
+</html>
