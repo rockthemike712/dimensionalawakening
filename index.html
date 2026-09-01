@@ -10,7 +10,8 @@
   * { box-sizing:border-box; }
   html,body{margin:0;height:100%;overflow:hidden;background:#02030a;color:#eafcff;
     font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
-    -webkit-user-select:none;user-select:none;overscroll-behavior:none;touch-action:none}
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+    overscroll-behavior:none;touch-action:none}
   canvas{display:block;touch-action:none}
   #ui{position:fixed;inset:0;pointer-events:none}
   #title{position:absolute;top:max(16px,env(safe-area-inset-top));left:20px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;opacity:.6}
@@ -43,7 +44,7 @@
 <body>
 <div id="ui">
   <div id="title">Dimensional Awakening / Fold Study V6</div>
-  <div id="count">SEEDS 0 / 3</div>
+  <div id="count">LIGHTS 0 / 3</div>
   <div id="moveStatus">TAP AN ARROW TO MOVE</div>
   <div id="beaconArrow">&#8595;</div>
   <div id="prompt">Move toward the beacon.</div>
@@ -189,23 +190,25 @@ const seedData=[
  {p:new THREE.Vector3(7,0,4)},     // beyond the seam — requires folding across
  {p:new THREE.Vector3(3,0,-5)}     // beyond the seam
 ];
-const seedMeshes=[]; let firstBeacon=null;
+// One rule the player can trust throughout: there is always exactly one
+// light to follow. Every seed carries the full beacon treatment (beam, glow),
+// but only the current target's is lit.
+const seedMeshes=[], beams=[], glows=[];
 seedData.forEach((s,i)=>{
  const g=new THREE.Group();
  const core=new THREE.Mesh(new THREE.OctahedronGeometry(.28,0),
-   new THREE.MeshStandardMaterial({color:0xffffff,emissive:i===0?0x55ffff:0xff49f7,emissiveIntensity:4,roughness:.1}));
+   new THREE.MeshStandardMaterial({color:0xffffff,emissive:0x55ffff,emissiveIntensity:4,roughness:.1}));
+ core.scale.setScalar(1.65);
  const ring=new THREE.Mesh(new THREE.TorusGeometry(.58,.035,8,64),
-   new THREE.MeshBasicMaterial({color:i===0?0x62ffff:0xff64ff,transparent:true,opacity:.65}));
- ring.rotation.x=Math.PI/2; g.add(core,ring);
- if(i===0){
-   core.scale.setScalar(1.65); ring.scale.setScalar(1.35);
-   const beam=new THREE.Mesh(new THREE.CylinderGeometry(.12,.38,12,24,1,true),
-     new THREE.MeshBasicMaterial({color:0x64f7ff,transparent:true,opacity:.18,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
-   beam.position.y=5.9; g.add(beam); firstBeacon=beam;
-   const glow=new THREE.PointLight(0x6cffff,34,14);glow.position.y=1.4;g.add(glow);
- }
+   new THREE.MeshBasicMaterial({color:0x62ffff,transparent:true,opacity:.65}));
+ ring.rotation.x=Math.PI/2; ring.scale.setScalar(1.35); g.add(core,ring);
+ const beam=new THREE.Mesh(new THREE.CylinderGeometry(.12,.38,12,24,1,true),
+   new THREE.MeshBasicMaterial({color:0x64f7ff,transparent:true,opacity:.18,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+ beam.position.y=5.9; g.add(beam); beams.push(beam);
+ const glow=new THREE.PointLight(0x6cffff,34,14);glow.position.y=1.4;g.add(glow);glows.push(glow);
  g.position.copy(s.p);g.position.y=.5;world.add(g);seedMeshes.push(g);
 });
+function currentTarget(){for(let i=0;i<seedData.length;i++)if(!seedData[i].taken)return i;return -1;}
 const guideLine=new THREE.Line(
   new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3(1,0,0)]),
   new THREE.LineDashedMaterial({color:0x73faff,transparent:true,opacity:.72,dashSize:.35,gapSize:.22}));
@@ -234,16 +237,17 @@ function pulseFlash(){flashEl.style.opacity=.5;setTimeout(()=>flashEl.style.opac
 
 function collectSeed(i){
  if(seedData[i].taken)return;
- seedData[i].taken=true; seeds++; countEl.textContent=`SEEDS ${seeds} / 3`;
+ seedData[i].taken=true; seeds++; countEl.textContent=`LIGHTS ${seeds} / 3`;
  seedMeshes[i].visible=false; pulseFlash(); chime();
  awakened=Math.min(1,awakened+.34); planeMat.uniforms.uAwake.value=awakened;
  if(seeds===1){
-   beaconArrow.style.opacity=0; guideLine.visible=false; moveStatus.style.opacity=0;
+   moveStatus.style.opacity=0;
    foldTarget=.15; // the world twitches: a hint that the seam is now alive
-   setPrompt('The wall of light will not let you pass. Grab the glowing seam and pull.');
+   setPrompt('The next light is beyond the wall. Grab the glowing seam and pull.');
  }
- if(seeds===2){setPrompt('Distance was only a rule. One seed remains.');}
+ if(seeds===2){setPrompt('Distance was only a rule. Follow the last light.');}
  if(seeds===3){
+   beaconArrow.style.opacity=0;
    setPrompt('You were never moving through space.');
    setTimeout(()=>setPrompt('You were changing what space meant.'),3200);
    setTimeout(()=>setPrompt('DIMENSIONAL AWAKENING'),7000);
@@ -289,16 +293,20 @@ function updatePlayer(dt){
 }
 
 function updateSeeds(t){
- if(seeds===0){
-   const a=foldedPoint(playerPos); a.y=.18;
-   const b=foldedPoint(seedData[0].p); b.y=.18;
+ const ct=currentTarget();
+ if(ct>=0){
+   const a=foldedPoint(playerPos); a.y+=.18;
+   const b=foldedPoint(seedData[ct].p); b.y+=.18;
+   guideLine.visible=true;
    guideLine.geometry.setFromPoints([a,b]); guideLine.computeLineDistances();
-   if(firstBeacon){firstBeacon.material.opacity=.13+.10*(.5+.5*Math.sin(t*3.2));}
- }
+ }else guideLine.visible=false;
  seedMeshes.forEach((g,i)=>{
    if(seedData[i].taken)return;
    const rp=foldedPoint(seedData[i].p);g.position.copy(rp);g.position.y+=.5+.12*Math.sin(t*2.1+i);
    g.rotation.y=t*(.5+i*.14);g.children[1].rotation.z=t*(.25+i*.11);
+   const active=i===ct;
+   beams[i].visible=active; glows[i].visible=active;
+   if(active)beams[i].material.opacity=.13+.10*(.5+.5*Math.sin(t*3.2));
    if(foldedPoint(playerPos).distanceTo(g.position)<.8)collectSeed(i);
  });
 }
@@ -368,8 +376,9 @@ function animate(){
  if(foldOsc)foldOsc.frequency.value=52+fold*40;
  updatePlayer(dt);updateSeeds(t);
 
- if(seeds===0){
-   const bp=foldedPoint(seedData[0].p);bp.y=1.0;bp.project(camera);
+ const ct=currentTarget();
+ if(ct>=0){
+   const bp=foldedPoint(seedData[ct].p);bp.y+=1.0;bp.project(camera);
    const sx=(bp.x*.5+.5)*innerWidth, sy=(-bp.y*.5+.5)*innerHeight;
    const ang=Math.atan2(sy-innerHeight*.42,sx-innerWidth*.5)*180/Math.PI+90;
    beaconArrow.style.left=Math.max(42,Math.min(innerWidth-42,sx))+'px';
