@@ -198,7 +198,10 @@ function depthChord(){[130,196,262,330,392,523].forEach((f,i)=>setTimeout(()=>bl
 function setPrompt(t){promptEl.style.visibility=t?'visible':'hidden';if(promptEl.textContent===t)return;
   promptEl.classList.add('swap');
   setTimeout(()=>{promptEl.textContent=t;promptEl.classList.remove('swap')},220);}
-function setPips(n){[...pipsEl.children].forEach((el,i)=>el.classList.toggle('lit',i<n));}
+function setPips(n,total){
+  if(total!==undefined){while(pipsEl.children.length<total)pipsEl.appendChild(document.createElement('i'));
+    while(pipsEl.children.length>total)pipsEl.removeChild(pipsEl.lastChild);}
+  [...pipsEl.children].forEach((el,i)=>el.classList.toggle('lit',i<n));}
 function pulseFlash(){flashEl.style.opacity=.5;setTimeout(()=>flashEl.style.opacity=0,90)}
 
 // ---------- starfield ----------
@@ -216,10 +219,10 @@ const planeGeo=new THREE.PlaneGeometry(24,18,120,90); planeGeo.rotateX(-Math.PI/
 const MAX_RIP=6;
 const planeMat=new THREE.ShaderMaterial({
   transparent:true, side:THREE.DoubleSide,
-  uniforms:{uTime:{value:0},uFold:{value:0},uAwake:{value:0},uDim:{value:0},
+  uniforms:{uTime:{value:0},uFold:{value:0},uFold2:{value:0},uAwake:{value:0},uDim:{value:0},
     uRip:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector4(0,0,-99,0))}},
   vertexShader:`
-    uniform float uTime; uniform float uFold; uniform float uAwake;
+    uniform float uTime; uniform float uFold; uniform float uFold2; uniform float uAwake;
     uniform vec4 uRip[${MAX_RIP}];
     varying vec3 vPos; varying float vRip; varying float vSide;
     void main(){
@@ -236,6 +239,8 @@ const planeMat=new THREE.ShaderMaterial({
       p.y+=rip*.22;
       vSide=step(0.0,position.x);
       if(p.x>0.0){ float x=p.x; p.x=cos(theta)*x; p.y+=sin(theta)*x; }
+      float t2=uFold2*.62;
+      if(p.x>8.6){ float x=p.x-8.6; float y=p.y; p.x=8.6+cos(t2)*x-sin(t2)*y; p.y=sin(t2)*x+cos(t2)*y; }
       p.y+=sin(length(position.xz)*1.2-uTime*1.8)*.06*(.2+uAwake);
       vPos=p; vRip=rip;
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);
@@ -334,7 +339,7 @@ for(let i=0;i<22;i++){
  const x=-10+Math.random()*20,z=-7+Math.random()*14;
  if(Math.abs(x)<1.6) continue;
  if(x>2&&Math.abs(z)<2.2) continue;         // keep the room's flight path clear
- if(Math.abs(x-6.6)<1.2||x>9.6) continue;   // and the wall / screen
+ if(Math.abs(x-6.6)<1.2||x>8.3) continue;   // and the wall / the new edge / screen
  const h=.5+Math.random()*1.8;
  const m=new THREE.Mesh(new THREE.CylinderGeometry(.09,.2,h,6),
    new THREE.MeshStandardMaterial({color:0x16384a,emissive:0x1a4a5e,emissiveIntensity:.7,roughness:.72,metalness:.3}));
@@ -368,6 +373,14 @@ const S2={
 };
 const S2_EMIT=new THREE.Vector3(3.0,0,0), S2_BARX=6.6, S2_SCRX=10.8;
 const S2_GAPZ=1.6, S2_GAPHW=.9, S2_BAND=1.7, S2_K=Math.PI/3.4, S2_WATCH_R=4.6;
+const S2_SEAM2X=8.6, S2_NR=5, SQF=.45;   // the second edge; five patterns; squeeze when fully pulled
+let roomFold=0, roomFoldTarget=0, dragging2=false, drag2StartY=0, drag2Start=0;
+const sq=()=>1-(1-SQF)*roomFold;        // pulling the far end closer squeezes the picture
+function roomFoldPoint(v){
+  const th=roomFold*.62; if(v.x<=S2_SEAM2X)return v.clone();
+  const x=v.x-S2_SEAM2X, y=v.y;
+  return new THREE.Vector3(S2_SEAM2X+Math.cos(th)*x-Math.sin(th)*y,Math.sin(th)*x+Math.cos(th)*y,v.z);
+}
 const S2_HOLD=1.4, S2_THRESH=.58, S2_NB=40, S2_HALF=5;
 const s2Group=new THREE.Group(); s2Group.visible=false; world.add(s2Group);
 const eyeBtn=document.getElementById('eye'), veil=document.getElementById('veil'), eyeLabel=document.getElementById('eyeLabel');
@@ -381,7 +394,13 @@ const S2_ROUNDS=[
    hint:'Stand on the far marker. Or close your eyes.'},
   {profile:z=>gpdf(z,-S2_BAND,.9),
    intro:'One more.',
-   hint:'Stand in the opening.'}
+   hint:'Stand in the opening.'},
+  {profile:z=>Math.pow(Math.cos(S2_K*z/SQF),2)*Math.exp(-(z/SQF)*(z/SQF)/20.5),
+   intro:'Now this shape.',
+   hint:'Pull the new edge. Then stand on the far marker.'},
+  {profile:z=>gpdf(z/SQF,S2_BAND,.5)+gpdf(z/SQF,-S2_BAND,.5),
+   intro:'Last one.',
+   hint:'Keep the edge pulled. Stand on the marker. Watch.'}
 ];
 function gauss(mu,sig){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();
   return mu+sig*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
@@ -393,8 +412,9 @@ function sampleFringe(){
   return 0;
 }
 function s2Spot(){
-  if(S2.round===0)return new THREE.Vector3(5.2,0,0);
-  if(S2.round===1)return new THREE.Vector3(2.3,0,playerPos.z>=0?5.4:-5.4);
+  const kind=['watch','far','gap','far','watch'][S2.round];
+  if(kind==='watch')return new THREE.Vector3(5.2,0,0);
+  if(kind==='far')return new THREE.Vector3(2.3,0,playerPos.z>=0?5.4:-5.4);
   return new THREE.Vector3(S2_BARX,0,playerPos.z>=0?S2_GAPZ:-S2_GAPZ);
 }
 function s2OnSpot(){
@@ -434,7 +454,7 @@ function drawScreen(dt,t){
   splatCtx.fillRect(0,0,SCR_W,SCR_H);
   scrCtx.globalCompositeOperation='source-over';
   scrCtx.fillStyle='#04101a';scrCtx.fillRect(0,0,SCR_W,SCR_H);
-  if(S2.target&&(S2.done<3||t-S2.celebT<1.4)){
+  if(S2.target&&(S2.done<S2_NR||t-S2.celebT<1.4)){
     const prog=Math.min(1,S2.hold/S2_HOLD), bw=SCR_W/S2_NB;
     const mk=ease((t-S2.morphT)/1.1), tgt=S2.target.map((v,i)=>THREE.MathUtils.lerp(S2.prevTarget?S2.prevTarget[i]:v,v,mk));
     let mx=0;for(const b of S2.bins)mx=Math.max(mx,b.n);
@@ -501,12 +521,21 @@ function buildStage2(){
   em.position.set(S2_EMIT.x,.8,S2_EMIT.z);s2Group.add(em);S2.emitter=em;
   const el=new THREE.PointLight(0x6cffff,20,9);el.position.copy(em.position);s2Group.add(el);
   // the screen at the back of the room, facing the player
+  const far=new THREE.Group();far.position.set(S2_SEAM2X,0,0);s2Group.add(far);S2.far=far;
   const scr=new THREE.Mesh(new THREE.PlaneGeometry(2*S2_HALF+1,4.4),
     new THREE.MeshBasicMaterial({map:scrTex,transparent:false}));
-  scr.rotation.y=-Math.PI/2;scr.position.set(S2_SCRX,2.3,0);s2Group.add(scr);
+  scr.rotation.y=-Math.PI/2;scr.position.set(S2_SCRX-S2_SEAM2X,2.3,0);far.add(scr);
   const frame=new THREE.Mesh(new THREE.BoxGeometry(.12,4.7,2*S2_HALF+1.3),new THREE.MeshBasicMaterial({color:0x8ffcff}));
-  frame.position.set(S2_SCRX+.1,2.3,0);s2Group.add(frame);
-  const scrLight=new THREE.PointLight(0x6cffff,12,10);scrLight.position.set(S2_SCRX-1.5,2.5,0);s2Group.add(scrLight);
+  frame.position.set(S2_SCRX+.1-S2_SEAM2X,2.3,0);far.add(frame);
+  const scrLight=new THREE.PointLight(0x6cffff,12,10);scrLight.position.set(S2_SCRX-1.5-S2_SEAM2X,2.5,0);far.add(scrLight);
+  // the second edge: same look as the first; appears after the third pattern
+  const s2seam=new THREE.Mesh(new THREE.BoxGeometry(.16,.06,14),new THREE.MeshBasicMaterial({color:0x60f7ff,transparent:true,opacity:.9}));
+  s2seam.position.set(S2_SEAM2X,.05,0);s2Group.add(s2seam);S2.seam2=s2seam;
+  const s2halo=new THREE.Mesh(new THREE.BoxGeometry(.9,.02,14),new THREE.MeshBasicMaterial({color:0x20d9ff,transparent:true,opacity:.14,blending:THREE.AdditiveBlending}));
+  s2halo.position.set(S2_SEAM2X,.03,0);s2Group.add(s2halo);S2.seam2Halo=s2halo;
+  const s2grab=new THREE.Mesh(new THREE.BoxGeometry(3.4,3,14),new THREE.MeshBasicMaterial({visible:false}));
+  s2grab.position.set(S2_SEAM2X,.8,0);s2Group.add(s2grab);S2.seam2Grab=s2grab;
+  s2seam.visible=s2halo.visible=false;
   // histogram bins (for matching; the visual is the screen)
   for(let i=0;i<S2_NB;i++)S2.bins.push({z:-S2_HALF+(i+.5)*(2*S2_HALF/S2_NB),n:0});
   // dot pool
@@ -525,6 +554,11 @@ function s2Reset(){
 function s2SetRound(r){
   S2.round=r;S2.roundT=clock.elapsedTime;S2.hold=0;S2.hinted=false;
   S2.prevTarget=S2.target||null;S2.morphT=clock.elapsedTime;
+  if(r===3&&S2.seam2&&!S2.seam2.visible){
+    S2.seam2.visible=S2.seam2Halo.visible=true;
+    for(let z=-6;z<=6;z+=3)emitRipple(S2_SEAM2X,z,1.2);
+    blip(392,.5,.1,'sine');setTimeout(()=>blip(523,.6,.1,'sine'),160);
+  }
   const R=S2_ROUNDS[r];
   let mx=0;const tp=S2.bins.map(b=>{const v=R.profile(b.z);mx=Math.max(mx,v);return v;});
   S2.target=tp.map(v=>v/mx);
@@ -534,7 +568,7 @@ function startStage2(){
   if(S2.active)return;
   buildStage2();
   S2.active=true;S2.startT=clock.elapsedTime;s2Group.visible=true;
-  countEl.textContent='PATTERNS 0 / 3';setPips(0);
+  countEl.textContent='PATTERNS 0 / '+S2_NR;setPips(0,S2_NR);
   eyeBtn.style.display='grid';eyeLabel.style.display='block';
   s2SetRound(0);
   setPrompt('Watch the screen.');
@@ -547,12 +581,12 @@ function s2Hit(z){
   blip(420+Math.abs(z)*60,.12,S2.eyes?.14:.06,'sine',z/S2_HALF);
 }
 function s2RoundDone(){
-  S2.done++;countEl.textContent=`PATTERNS ${S2.done} / 3`;setPips(S2.done);
+  S2.done++;countEl.textContent=`PATTERNS ${S2.done} / ${S2_NR}`;setPips(S2.done);
   S2.celebT=clock.elapsedTime;S2.hold=0;S2.match=0;
   pulseFlash();chime();
   for(let i=0;i<S2_NB;i+=6)emitRipple(S2_SCRX-.5,S2.bins[i].z,.5);
   emitRipple(S2.markerPos.x,S2.markerPos.z,1.4);
-  if(S2.done>=3){
+  if(S2.done>=S2_NR){
     setTimeout(()=>setPrompt('End of prototype.'),1400);
   }else setTimeout(()=>{s2Reset();s2SetRound(S2.done);},1400);
 }
@@ -568,9 +602,9 @@ function updateStage2(dt,t){
     const d=S2.dots.find(d=>!d.on);
     if(d){
       const blocked=s2BlockedGap(), watched=!S2.eyes&&s2NearSlits();
-      if(blocked!==0){d.mode='particle';const open=-blocked;d.gapZ=open*S2_GAPZ;d.landZ=gauss(open*S2_BAND,.9);}
-      else if(watched){d.mode='particle';const g=Math.random()<.5?1:-1;d.gapZ=g*S2_GAPZ;d.landZ=gauss(g*S2_BAND,.5);}
-      else{d.mode='wave';d.gapZ=0;d.landZ=sampleFringe();}
+      if(blocked!==0){d.mode='particle';const open=-blocked;d.gapZ=open*S2_GAPZ;d.landZ=gauss(open*S2_BAND,.9)*sq();}
+      else if(watched){d.mode='particle';const g=Math.random()<.5?1:-1;d.gapZ=g*S2_GAPZ;d.landZ=gauss(g*S2_BAND,.5)*sq();}
+      else{d.mode='wave';d.gapZ=0;d.landZ=sampleFringe()*sq();}
       d.on=true;d.t=0;d.waveAt=0;d.m.visible=true;d.m.material.opacity=.95;
       d.m.position.set(S2_EMIT.x,.8,S2_EMIT.z+gauss(0,.15));
     }
@@ -589,14 +623,15 @@ function updateStage2(dt,t){
       if(t-d.waveAt>.5){s2Hit(d.landZ);d.on=false;}
     }else if(d.t<A+B){
       const k=(d.t-A)/B;
-      d.m.position.x=THREE.MathUtils.lerp(S2_BARX,S2_SCRX-.15,k);
-      d.m.position.z=THREE.MathUtils.lerp(d.gapZ,d.landZ,k);
-      d.m.position.y=THREE.MathUtils.lerp(.8,2.3,k);
+      const end=roomFoldPoint(new THREE.Vector3(S2_SCRX-.15,2.3,d.landZ));
+      d.m.position.x=THREE.MathUtils.lerp(S2_BARX,end.x,k);
+      d.m.position.z=THREE.MathUtils.lerp(d.gapZ,end.z,k);
+      d.m.position.y=THREE.MathUtils.lerp(.8,end.y,k);
     }else{s2Hit(d.landZ);d.on=false;d.m.visible=false;}
   }
   let total=0;
   for(const b of S2.bins){b.n*=Math.exp(-dt*.4);total+=b.n;}
-  if(S2.done<3){
+  if(S2.done<S2_NR){
     const sp=s2Spot(), on=s2OnSpot();
     S2.markerPos.lerp(sp,1-Math.pow(.03,dt));
     S2.marker.visible=true;S2.marker.position.x=S2.markerPos.x;S2.marker.position.z=S2.markerPos.z;
@@ -606,21 +641,21 @@ function updateStage2(dt,t){
     S2.mkRing.material.color.setHex(on?0xffffff:0xaefcff);
   }else S2.marker.visible=false;
   const nearNow=s2NearSlits();
-  if(nearNow!==S2.nearPrev){S2.nearPrev=nearNow;if(S2.arrived&&S2.done<3)blip(nearNow?523:330,.3,.07,'sine');}
+  if(nearNow!==S2.nearPrev){S2.nearPrev=nearNow;if(S2.arrived&&S2.done<S2_NR)blip(nearNow?523:330,.3,.07,'sine');}
   const blk=s2BlockedGap();
   for(const gp of S2.gapPads){
     const inIt=blk===gp.g;
-    const guide=S2.round===2&&S2.done<3?.35*(.5+.5*Math.sin(t*4.5)):.06*(.5+.5*Math.sin(t*2));
+    const guide=S2.round===2&&S2.done<S2_NR?.35*(.5+.5*Math.sin(t*4.5)):.06*(.5+.5*Math.sin(t*2));
     gp.m.material.opacity=inIt?.95:.35+guide;
     gp.m.material.color.setHex(inIt?0xffffff:0x8ffcff);
   }
   if(blk!==S2.lastBlk){
     S2.lastBlk=blk;
     if(blk!==0){blip(660,.18,.1,'sine');emitRipple(S2_BARX,blk*S2_GAPZ,.9);
-      if(S2.round===2&&S2.done<3)setPrompt('Blocked.');}
+      if(S2.round===2&&S2.done<S2_NR)setPrompt('Blocked.');}
   }
   drawScreen(dt,t);
-  if(S2.done>=3||t-S2.celebT<1.4)return;
+  if(S2.done>=S2_NR||t-S2.celebT<1.4)return;
   let m=0;
   if(total>14){
     let tsum=0;for(const v of S2.target)tsum+=v;
@@ -703,7 +738,7 @@ function updatePlayer(dt,t){
    const inGap=Math.abs(playerPos.z-S2_GAPZ)<S2_GAPHW||Math.abs(playerPos.z+S2_GAPZ)<S2_GAPHW;
    if(!inGap){playerPos.x=prevX<S2_BARX?S2_BARX-.4:S2_BARX+.4;velocity.x*=-.25;}
  }
- if(S2.active&&playerPos.x>S2_SCRX-1.2){playerPos.x=S2_SCRX-1.2;velocity.x*=-.25;}
+ if(S2.active&&playerPos.x>S2_SEAM2X-.3){playerPos.x=S2_SEAM2X-.3;velocity.x*=-.25;}
  moveAccum+=velocity.length()*dt;
  if(moveAccum>1.1){emitRipple(playerPos.x,playerPos.z,.9);moveAccum=0;}
 
@@ -722,7 +757,7 @@ function updateSeeds(t){
    const a=foldedPoint(playerPos); a.y+=.18;
    const b=foldedPoint(seedData[ct].p); b.y+=.18;
    guideLine.visible=true;guideLine.geometry.setFromPoints([a,b]);guideLine.computeLineDistances();
- }else if(S2.active&&S2.done<3&&!s2OnSpot()){
+ }else if(S2.active&&S2.done<S2_NR&&!s2OnSpot()){
    const sp=s2Spot();
    const a=foldedPoint(playerPos); a.y+=.18;
    guideLine.visible=true;guideLine.geometry.setFromPoints([a,new THREE.Vector3(sp.x,.18,sp.z)]);guideLine.computeLineDistances();
@@ -771,22 +806,34 @@ addEventListener('keyup',e=>keys[e.code]=false);
 // ---------- fold drag: grab the edge ----------
 const raycaster=new THREE.Raycaster(), ndc=new THREE.Vector2();
 renderer.domElement.addEventListener('pointerdown',e=>{
-  if(seeds<1||crossed)return;
   ndc.set((e.clientX/innerWidth)*2-1,-(e.clientY/innerHeight)*2+1);
   raycaster.setFromCamera(ndc,camera);
+  if(crossed){
+    if(S2.active&&S2.seam2&&S2.seam2.visible&&raycaster.intersectObject(S2.seam2Grab).length>0){
+      dragging2=true;drag2StartY=e.clientY;drag2Start=roomFoldTarget;
+      renderer.domElement.setPointerCapture(e.pointerId);audio();
+    }
+    return;
+  }
+  if(seeds<1)return;
   if(raycaster.intersectObject(seamGrab).length>0){
     dragging=true;dragStartX=e.clientX;dragStartFold=foldTarget;
     renderer.domElement.setPointerCapture(e.pointerId);audio();
   }
 });
 renderer.domElement.addEventListener('pointermove',e=>{
+  if(dragging2){roomFoldTarget=THREE.MathUtils.clamp(drag2Start+(e.clientY-drag2StartY)/(innerHeight*.28),0,1);return;}
   if(!dragging)return;
   const delta=(dragStartX-e.clientX)/Math.max(innerWidth*.38,260);
   foldTarget=THREE.MathUtils.clamp(dragStartFold+delta,0,1);
   if(foldTarget>.35&&fold<FOLD_OPEN)setPrompt('Keep pulling.');
   if(foldTarget>FOLD_OPEN)setPrompt('Walk into the edge.');
 });
-const endDrag=e=>{if(dragging){dragging=false;try{renderer.domElement.releasePointerCapture(e.pointerId)}catch(_){}}};
+const endDrag=e=>{
+  if(dragging2){dragging2=false;const latch=roomFoldTarget>.5?1:0;
+    if(latch!==(drag2Start>.5?1:0))blip(latch?660:330,.35,.1,'sine');
+    roomFoldTarget=latch;try{renderer.domElement.releasePointerCapture(e.pointerId)}catch(_){}}
+  if(dragging){dragging=false;try{renderer.domElement.releasePointerCapture(e.pointerId)}catch(_){}}};
 renderer.domElement.addEventListener('pointerup',endDrag);
 renderer.domElement.addEventListener('pointercancel',endDrag);
 
@@ -825,11 +872,14 @@ function animate(){
  const dt=Math.min(clock.getDelta(),.033),t=clock.elapsedTime;
  dim=crossed?ease((t-dimT)/2.0):0;
  fold+=(foldTarget-fold)*(1-Math.pow(.0001,dt));
- planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;planeMat.uniforms.uDim.value=dim;
+ roomFold+=(roomFoldTarget-roomFold)*(1-Math.pow(.0005,dt));
+ planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;planeMat.uniforms.uFold2.value=roomFold;planeMat.uniforms.uDim.value=dim;
+ if(S2.far)S2.far.rotation.z=roomFold*.62;
+ if(S2.seam2&&S2.seam2.visible){S2.seam2.material.opacity=.62+.3*Math.sin(t*3.1);S2.seam2Halo.material.opacity=.09+.06*Math.sin(t*2.2);}
  seamMat.opacity=.62+.3*Math.sin(t*3.1);
  seamHalo.material.opacity=.09+.06*Math.sin(t*2.2);
  seamWall.material.opacity=.16*dim;
- if(foldGain)foldGain.gain.value=fold*.06;
+ if(foldGain)foldGain.gain.value=(fold+roomFold)*.06;
  if(foldOsc)foldOsc.frequency.value=52+fold*40;
  updateCamera(t);
  updatePlayer(dt,t);updateSeeds(t);updateLandmarks();updateStage2(dt,t);
@@ -859,7 +909,8 @@ addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updat
 
 // read-only state hook for automated smoke tests
 window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get seeds(){return seeds},get moves(){return moveCount},
-  get dim(){return dim},get crossed(){return crossed},
+  get dim(){return dim},get crossed(){return crossed},get roomFold(){return roomFold},
+  project(x,y,z){const v=new THREE.Vector3(x,y,z).project(camera);return {x:(v.x*.5+.5)*innerWidth,y:(-v.y*.5+.5)*innerHeight};},
   get s2(){let tot=0;for(const b of S2.bins)tot+=b.n;return {active:S2.active,done:S2.done,round:S2.round,match:+S2.match.toFixed(2),hold:+S2.hold.toFixed(1),eyes:S2.eyes,blk:s2BlockedGap(),near:s2NearSlits(),total:+tot.toFixed(1),peak:S2.bins.length?S2.bins.reduce((a,b)=>b.n>a.n?b:a).z.toFixed(2):null}},
   s2start:startStage2,s2round:s2SetRound,
   jump3d(){if(!crossed){crossed=true;dimT=-99;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';}}};
