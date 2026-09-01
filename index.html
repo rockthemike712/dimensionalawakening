@@ -239,7 +239,7 @@ const planeMat=new THREE.ShaderMaterial({
       p.y+=rip*.22;
       vSide=step(0.0,position.x);
       if(p.x>0.0){ float x=p.x; p.x=cos(theta)*x; p.y+=sin(theta)*x; }
-      float t2=uFold2*1.1;
+      float t2=uFold2*.62;
       if(p.x>8.6){ float x=p.x-8.6; float y=p.y; p.x=8.6+cos(t2)*x-sin(t2)*y; p.y=sin(t2)*x+cos(t2)*y; }
       p.y+=sin(length(position.xz)*1.2-uTime*1.8)*.06*(.2+uAwake);
       vPos=p; vRip=rip;
@@ -377,7 +377,7 @@ const S2_SEAM2X=8.6, S2_NR=5, SQF=.45;   // the second edge; five patterns; sque
 let roomFold=0, roomFoldTarget=0, dragging2=false, drag2StartY=0, drag2Start=0;
 const sq=()=>1-(1-SQF)*roomFold;        // pulling the far end closer squeezes the picture
 function roomFoldPoint(v){
-  const th=roomFold*1.1; if(v.x<=S2_SEAM2X)return v.clone();
+  const th=roomFold*.62; if(v.x<=S2_SEAM2X)return v.clone();
   const x=v.x-S2_SEAM2X, y=v.y;
   return new THREE.Vector3(S2_SEAM2X+Math.cos(th)*x-Math.sin(th)*y,Math.sin(th)*x+Math.cos(th)*y,v.z);
 }
@@ -874,7 +874,7 @@ function animate(){
  fold+=(foldTarget-fold)*(1-Math.pow(.0001,dt));
  roomFold+=(roomFoldTarget-roomFold)*(1-Math.pow(.0005,dt));
  planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;planeMat.uniforms.uFold2.value=roomFold;planeMat.uniforms.uDim.value=dim;
- if(S2.far)S2.far.rotation.z=roomFold*1.1;
+ if(S2.far)S2.far.rotation.z=roomFold*.62;
  if(S2.seam2&&S2.seam2.visible){S2.seam2.material.opacity=.62+.3*Math.sin(t*3.1);S2.seam2Halo.material.opacity=.09+.06*Math.sin(t*2.2);}
  seamMat.opacity=.62+.3*Math.sin(t*3.1);
  seamHalo.material.opacity=.09+.06*Math.sin(t*2.2);
