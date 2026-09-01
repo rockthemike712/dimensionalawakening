@@ -24,7 +24,7 @@
     font:700 12px ui-monospace,monospace;color:#dfffff;opacity:.75;letter-spacing:.1em;transition:opacity .6s}
   #beaconArrow{position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);font-size:34px;color:#bffcff;
     text-shadow:0 0 18px #65f7ff;transition:opacity .4s}
-  #flash{position:absolute;inset:0;background:white;opacity:0;transition:opacity .18s}
+  #flash{position:absolute;inset:0;background:white;opacity:0;transition:opacity .18s;mix-blend-mode:difference}
   #dpad{position:absolute;left:max(14px,env(safe-area-inset-left));bottom:max(14px,env(safe-area-inset-bottom));
     width:150px;height:150px;pointer-events:auto;filter:drop-shadow(0 0 18px rgba(80,245,255,.16));transition:opacity .5s}
   .dkey{position:absolute;-webkit-appearance:none;appearance:none;width:48px;height:48px;
@@ -86,6 +86,7 @@ let dragging=false, dragStartX=0, dragStartFold=0;
 const playerPos=new THREE.Vector3(-7,0,-1);
 const velocity=new THREE.Vector3();
 let seeds=0, awakened=0, moveCount=0;
+let crossT=-99, ripIdx=0, moveAccum=0;   // crossing-moment clock & ripple ring buffer
 const keys={};
 const held={x:0,z:0};          // d-pad hold state
 
@@ -130,23 +131,36 @@ function chime(){[523,659,784,1046].forEach((f,i)=>setTimeout(()=>blip(f,.35,.09
 
 // ---------- foldable plane ----------
 const planeGeo=new THREE.PlaneGeometry(24,18,120,90); planeGeo.rotateX(-Math.PI/2);
+const MAX_RIP=6;
 const planeMat=new THREE.ShaderMaterial({
   transparent:true, side:THREE.DoubleSide,
-  uniforms:{uTime:{value:0},uFold:{value:0},uAwake:{value:0}},
+  uniforms:{uTime:{value:0},uFold:{value:0},uAwake:{value:0},
+    uRip:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector4(0,0,-99,0))}},
   vertexShader:`
     uniform float uTime; uniform float uFold; uniform float uAwake;
-    varying vec3 vPos;
+    uniform vec4 uRip[${MAX_RIP}];
+    varying vec3 vPos; varying float vRip;
     void main(){
       vec3 p=position;
       float theta=uFold*1.42;
+      // touch ripples: every player step is a ring expanding through the grid
+      float rip=0.0;
+      for(int i=0;i<${MAX_RIP};i++){
+        float age=uTime-uRip[i].z;
+        if(age>0.0&&age<3.0){
+          float d=distance(position.xz,uRip[i].xy);
+          rip+=exp(-9.0*abs(d-age*3.4))*exp(-age*1.4)*uRip[i].w;
+        }
+      }
+      p.y+=rip*.22;
       if(p.x>0.0){ float x=p.x; p.x=cos(theta)*x; p.y+=sin(theta)*x; }
       p.y+=sin(length(position.xz)*1.2-uTime*1.8)*.06*(.2+uAwake);
-      vPos=p;
+      vPos=p; vRip=rip;
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);
     }`,
   fragmentShader:`
     uniform float uTime; uniform float uFold; uniform float uAwake;
-    varying vec3 vPos;
+    varying vec3 vPos; varying float vRip;
     float grid(float x,float s){float q=abs(fract(x/s-.5)-.5)/fwidth(x/s);return 1.-min(q,1.);}
     void main(){
       float g=max(grid(vPos.x,1.0),grid(vPos.z,1.0));
@@ -155,10 +169,25 @@ const planeMat=new THREE.ShaderMaterial({
       float pulse=.5+.5*sin(uTime*.7+vPos.x*.3-vPos.z*.22);
       vec3 col=mix(a,b,g*.48+fine)+vec3(.03,.13,.15)*pulse*uAwake;
       col+=vec3(.1,.9,1.2)*exp(-abs(vPos.x)*1.9)*uFold*.65;
+      col+=vec3(.2,1.0,1.1)*vRip*.9;
+      // awakening makes color stop being one describable thing:
+      // interference moire + slow channel drift, scaled by uAwake
+      float m=sin(vPos.x*6.0+uTime*.6)*sin(vPos.z*6.0-uTime*.5);
+      vec3 wrong=vec3(.55+.45*sin(uTime*.31+vPos.z*.4),
+                      .35+.35*sin(uTime*.23+vPos.x*.35+2.1),
+                      .7+.3*sin(uTime*.27+3.9));
+      col+=wrong*smoothstep(.45,1.0,m)*.24*uAwake*(g*.9+fine+.25);
+      float drift=uAwake*.45*(.5+.5*sin(uTime*.4+length(vPos.xz)*.35));
+      col=mix(col,col.brg,drift);
       gl_FragColor=vec4(col,.92);
     }`
 });
 world.add(new THREE.Mesh(planeGeo,planeMat));
+// ripples live in unfolded plane coordinates, same space as playerPos
+function emitRipple(x,z,s=1){
+  planeMat.uniforms.uRip.value[ripIdx].set(x,z,clock.elapsedTime,s);
+  ripIdx=(ripIdx+1)%MAX_RIP;
+}
 
 // ---------- seam: barrier, grab handle, crossing point ----------
 const seamMat=new THREE.MeshBasicMaterial({color:0x60f7ff,transparent:true,opacity:.9});
@@ -214,7 +243,9 @@ const guideLine=new THREE.Line(
   new THREE.LineDashedMaterial({color:0x73faff,transparent:true,opacity:.72,dashSize:.35,gapSize:.22}));
 guideLine.computeLineDistances();world.add(guideLine);
 
-// landmarks so motion is visually undeniable
+// landmarks so motion is visually undeniable; those on the right half must
+// ride the fold with the plane instead of floating in place
+const landmarks=[];
 for(let i=0;i<18;i++){
  const x=-10+Math.random()*20,z=-7+Math.random()*14;
  if(Math.abs(x)<1.6) continue;
@@ -222,6 +253,16 @@ for(let i=0;i<18;i++){
  const m=new THREE.Mesh(new THREE.CylinderGeometry(.07,.16,h,5),
    new THREE.MeshStandardMaterial({color:0x16384a,emissive:0x0b2330,emissiveIntensity:.6,roughness:.72,metalness:.3}));
  m.position.set(x,h/2,z);world.add(m);
+ landmarks.push({m,x,z,h});
+}
+function updateLandmarks(){
+ const th=fold*1.42, up=new THREE.Vector3(-Math.sin(th),Math.cos(th),0);
+ for(const l of landmarks){
+   if(l.x<=0)continue;
+   const gp=foldedPoint(new THREE.Vector3(l.x,0,l.z));
+   l.m.position.copy(gp).addScaledVector(up,l.h/2);
+   l.m.rotation.z=th;
+ }
 }
 
 // map logical (unfolded) coordinates to render space under the current fold
@@ -239,6 +280,7 @@ function collectSeed(i){
  if(seedData[i].taken)return;
  seedData[i].taken=true; seeds++; countEl.textContent=`LIGHTS ${seeds} / 3`;
  seedMeshes[i].visible=false; pulseFlash(); chime();
+ emitRipple(seedData[i].p.x,seedData[i].p.z,1.7);
  awakened=Math.min(1,awakened+.34); planeMat.uniforms.uAwake.value=awakened;
  if(seeds===1){
    moveStatus.style.opacity=0;
@@ -272,9 +314,12 @@ function updatePlayer(dt){
    if(fold>FOLD_OPEN&&Math.abs(velocity.x)>.2){
      // the fold joins the two halves: crossing the seam is a jump across space
      const sign=velocity.x>0?1:-1;
+     emitRipple(playerPos.x,playerPos.z,1.4);
      playerPos.x=sign>0?7.2:-7.2;
      playerPos.z*=-.72;
+     emitRipple(playerPos.x,playerPos.z,1.4);
      velocity.multiplyScalar(.55);
+     crossT=clock.elapsedTime; // the moment space turns around you
      pulseFlash(); blip(196,.4,.15,'sine'); blip(392,.5,.1,'sine');
      awakened=Math.min(1,awakened+.1);planeMat.uniforms.uAwake.value=awakened;
      if(seeds>=1) setPrompt('Two distant places just touched. Keep going.');
@@ -286,6 +331,8 @@ function updatePlayer(dt){
      if(seeds>=1&&fold<FOLD_OPEN)setPrompt('The wall of light will not let you pass. Grab the seam and pull.');
    }
  }
+ moveAccum+=velocity.length()*dt;
+ if(moveAccum>1.3){emitRipple(playerPos.x,playerPos.z,.55);moveAccum=0;}
  const rp=foldedPoint(playerPos);player.position.copy(rp);player.position.y+=.45;
  player.scale.setScalar(portraitMode()?1.7:1);
  player.rotation.y+=dt*(.7+awakened*1.8);
@@ -321,6 +368,7 @@ function bindPad(id,ax,val){
     // velocity impulse so even the shortest tap yields a clearly visible glide,
     // and all movement passes through the seam barrier/crossing logic
     if(ax==='x')velocity.x+=val*10; else velocity.z+=val*10;
+    emitRipple(playerPos.x,playerPos.z,.9);
     moveCount++;
     if(moveCount<=6){moveStatus.textContent='MOVEMENT '+moveCount+' ✓';}
     else moveStatus.style.opacity=0;
@@ -374,7 +422,9 @@ function animate(){
  seamWall.material.opacity=Math.max(0,.16*(1-fold/FOLD_OPEN))+.02;
  if(foldGain)foldGain.gain.value=fold*.06;
  if(foldOsc)foldOsc.frequency.value=52+fold*40;
- updatePlayer(dt);updateSeeds(t);
+ updatePlayer(dt);updateSeeds(t);updateLandmarks();
+ renderer.toneMappingExposure=1.15+awakened*.35;
+ scene.userData.stars.material.opacity=.42+.3*awakened;
 
  const ct=currentTarget();
  if(ct>=0){
@@ -386,6 +436,9 @@ function animate(){
    beaconArrow.style.transform='translate(-50%,-50%) rotate('+ang+'deg)';
  }
  scene.userData.stars.rotation.y=t*.005*(1+awakened*3);
+ // full awakening: the world breathes and the stars begin to spiral
+ world.scale.setScalar(1+.025*Math.sin(t*.7)*awakened);
+ scene.userData.stars.rotation.x=Math.sin(t*.05)*.3*awakened;
 
  const wob=awakened*.25;
  const target=foldedPoint(playerPos);target.y=0;
@@ -404,6 +457,14 @@ function animate(){
    camera.position.z=14+target.z*.12+Math.cos(t*.21)*wob;
    camera.position.y=11+Math.sin(t*.31)*wob;
    camera.lookAt(target.x*.25,0,target.z*.2);
+ }
+ // crossing the fold: space turns around you for ~a second — a camera roll
+ // and FOV punch that follow the fold's own rotation, not a cut
+ const ck=(t-crossT)/.95;
+ if(ck>=0&&ck<1){
+   const e=Math.sin(ck*Math.PI);
+   camera.rotateZ(e*.85);
+   camera.fov+=e*24;camera.updateProjectionMatrix();
  }
  renderer.render(scene,camera);
 }
