@@ -53,7 +53,8 @@ Two dimensions, one crossing:
    they land, and a ghost picture of the shape it wants. Paint it:
    two piles (stand close, watch) → stripes (step away, or hold the eye to
    close yours and *hear* them land) → one pile (stand in an opening and block
-   it). The mathematics is never named.
+   it). Then a second edge: pull it and the screen folds closer, squeezing the
+   picture — two more patterns need it. The mathematics is never named.
 
 A single variable, `dim` (0 → 1), drives the whole shift: camera height and
 field of view, the player's disc-to-sphere crossfade, pillar extrusion, fog,
@@ -93,6 +94,10 @@ intuitive on both sides of the crossing).
       (2D → 3D); stage 2 lives in the 3D room with the pattern painted on a
       big screen you face
 - [ ] The subtle impossibility: a reflection somewhere it shouldn't be
-- [ ] A second fold seam that composes with the first (handoff §11)
+- [x] **A second edge that composes with the first.** After the third pattern a
+      new edge appears across the room; pull it and the far end (screen
+      included) folds up toward you. The screen is closer, so the picture
+      squeezes: two more patterns (narrow stripes, close piles) can only be
+      painted with the edge pulled. Fold space to change what the lights do
 - [ ] Then — and only then — TypeScript/Vite project structure, more
       dimensions, shaders, procedural worlds
