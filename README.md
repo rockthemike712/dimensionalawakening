@@ -17,7 +17,7 @@ lives in [`docs/HANDOFF.md`](docs/HANDOFF.md).
 
 | File | Purpose |
 |---|---|
-| [`index.html`](index.html) | **Fold Prototype V6** — the current playable vertical slice (Three.js, single file, no build step) |
+| [`index.html`](index.html) | **V7** — the current playable vertical slice: 2D sheet → fold → birth of depth → 3D room (Three.js, single file, no build step) |
 | [`test0.html`](test0.html) | **Test 0** — minimal input diagnostic with no Three.js. Open this first on a phone to prove tap input works before debugging anything else |
 | [`docs/HANDOFF.md`](docs/HANDOFF.md) | Complete design/concept handoff document |
 | [`docs/prototype-v5-archive.html`](docs/prototype-v5-archive.html) | Archived V5 prototype (pre-fix, kept for reference) |
@@ -37,35 +37,37 @@ browsers since the only dependency is Three.js from a CDN.)
 **Controls:** WASD / arrow keys, or the on-screen pad (tap for a step, hold to
 keep moving). After the first seed, drag the glowing cyan seam to fold space.
 
-## The V6 vertical slice
+## The V7 vertical slice
 
-The loop from the handoff, made real:
+Two dimensions, one crossing:
 
-1. **Move** toward the beacon → collect the first seed.
-2. A **wall of light** along the seam blocks the far half of the world.
-3. **Grab the seam and pull** — the far half of the plane folds up and over.
-4. Fold far enough and the two halves **touch**: walking into the seam carries
-   you across space to the far side.
-5. Collect the remaining seeds. *"You were never moving through space. You
-   were changing what space meant."*
+1. **2D — the sheet.** Seen straight from above. Move toward the light; the
+   glowing edge will not let you pass.
+2. **Fold.** Grab the edge and pull: the far half of the sheet lifts toward
+   you and squeezes onto the edge — the far side is touching it.
+3. **Birth of depth.** Walk into the edge. The camera falls out of the sky and
+   lands behind you; the marks on the sheet extrude into pillars; you cast a
+   shadow. *"You lifted the paper. Now you are standing on it."*
+4. **3D — the room.** Follow two more lights, then something pours dots at a
+   wall with two openings. A big screen at the back of the room shows where
+   they land, and a ghost picture of the shape it wants. Paint it:
+   two piles (stand close, watch) → stripes (step away, or hold the eye to
+   close yours and *hear* them land) → one pile (stand in an opening and block
+   it). The mathematics is never named.
 
-### Fixes over V5 (see handoff §18–19)
+A single variable, `dim` (0 → 1), drives the whole shift: camera height and
+field of view, the player's disc-to-sphere crossfade, pillar extrusion, fog,
+and even which way "up" on the d-pad points (screen-relative, so it stays
+intuitive on both sides of the crossing).
 
-- **D-pad rebuilt on pointer events** — a tap gives an immediate, clearly
-  visible movement impulse; holding keeps you moving. V5 used `onclick`,
-  which was unreliable in embedded viewers and gave imperceptible steps.
-- **Fold drag no longer hijacks every touch** — V5 started a fold drag on any
-  canvas `pointerdown`, so stray touches silently bent the world. V6 raycasts
-  against a fat invisible collider around the seam; you must actually grab it,
-  and folding only unlocks after the first seed.
-- **The seam is now a real obstacle** — V5's fold was optional decoration; in
-  V6 you cannot reach seeds 2 and 3 without folding, which is the entire
-  point of the mechanic.
-- **Portrait camera frames player + objective together**, movement counter
-  confirms input on screen, safe-area insets respected, double-tap zoom and
-  scroll-bounce suppressed for iOS Safari.
-- **Audio feedback** (Web Audio, unlocked on first gesture): movement blips, a
-  collect chime, and a drone that deepens as you fold.
+### Design principles this build follows (see `docs/HANDOFF.md`)
+
+- Simple hands: move, pull, walk into it, stand somewhere, close your eyes.
+- The math is hidden: no "fold", "slit", "quantum", "interference" anywhere.
+- Psychedelia grows from the mechanics — ripples from footsteps, colour that
+  drifts as you awaken, a world that breathes — never painted on.
+- UI speaks the world's language: ripple rings on key presses, text that
+  condenses out of blur, diamond pips, an eye that squints shut.
 
 ## Testing protocol (per handoff §20)
 
@@ -87,6 +89,9 @@ The loop from the handoff, made real:
       eyes open) they land in two piles; your body can block a gap; a
       hold-to-close-your-eyes button lets you *hear* what you can't see.
       Fill all three detector pads to finish. The math is never named.
+- [x] **V7: the dimensional shift.** Crossing the fold is the birth of depth
+      (2D → 3D); stage 2 lives in the 3D room with the pattern painted on a
+      big screen you face
 - [ ] The subtle impossibility: a reflection somewhere it shouldn't be
 - [ ] A second fold seam that composes with the first (handoff §11)
 - [ ] Then — and only then — TypeScript/Vite project structure, more
