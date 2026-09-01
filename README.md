@@ -78,10 +78,16 @@ The loop from the handoff, made real:
 
 ## Roadmap
 
-- [ ] Validate Test 0 + V6 on iPhone Safari (the current milestone: *make the
-      first 30 seconds genuinely fun and completely obvious on a phone*)
-- [ ] Juice the fold-crossing moment (the "something impossible happened" beat)
-- [ ] Second fold puzzle with no text (handoff §28, 2:30–3:30)
+- [x] Validate Test 0 + V6 on iPhone Safari — done, input proven on a real phone
+- [x] Juice the fold-crossing moment (camera rolls with the fold, FOV punch)
+- [x] Psychedelia pass 1: touch ripples, impossible color, inverted flashes,
+      breathing world (all tied to player actions, scaling with awakening)
+- [x] **Stage 2: the two-gap wall** — an observation puzzle. Dots pour at a
+      wall with two gaps; unwatched they land in stripes, watched (stand near,
+      eyes open) they land in two piles; your body can block a gap; a
+      hold-to-close-your-eyes button lets you *hear* what you can't see.
+      Fill all three detector pads to finish. The math is never named.
 - [ ] The subtle impossibility: a reflection somewhere it shouldn't be
+- [ ] A second fold seam that composes with the first (handoff §11)
 - [ ] Then — and only then — TypeScript/Vite project structure, more
       dimensions, shaders, procedural worlds
