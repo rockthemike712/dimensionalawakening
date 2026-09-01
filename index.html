@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%2350f2ff%22/></svg>" />
-<title>Dimensional Awakening — Fold Prototype V6</title>
+<title>Dimensional Awakening — V7</title>
 <style>
   * { box-sizing:border-box; }
   html,body{margin:0;height:100%;overflow:hidden;background:#02030a;color:#eafcff;
@@ -21,6 +21,7 @@
   #pips i{width:7px;height:7px;transform:rotate(45deg);border:1px solid rgba(140,250,255,.5);transition:background .3s,box-shadow .3s,border-color .3s}
   #pips i.lit{background:#aefcff;border-color:#aefcff;box-shadow:0 0 12px #65f7ff;animation:pipPop .5s cubic-bezier(.22,2.4,.5,1)}
   @keyframes pipPop{0%{transform:rotate(45deg) scale(.3)}55%{transform:rotate(45deg) scale(1.8)}100%{transform:rotate(45deg) scale(1)}}
+  #dimLabel{position:absolute;left:20px;top:calc(max(16px,env(safe-area-inset-top)) + 20px);font-size:10px;letter-spacing:.3em;opacity:.45;transition:opacity .6s,letter-spacing .8s}
   #prompt{position:absolute;left:50%;bottom:calc(max(16px,env(safe-area-inset-bottom)) + 170px);transform:translateX(-50%);
     padding:10px 16px;border:1px solid rgba(180,245,255,.18);border-radius:999px;background:rgba(1,5,14,.5);
     backdrop-filter:blur(10px);font-size:14px;max-width:78vw;text-align:center;
@@ -44,7 +45,6 @@
     box-shadow:inset 0 0 18px rgba(0,230,255,.05);
     transition:transform .18s cubic-bezier(.22,2.2,.5,1),background .12s,border-color .12s,box-shadow .12s}
   .dkey span{display:block;transition:transform .14s cubic-bezier(.22,2.2,.5,1)}
-  /* each key carries a luminous hairline on its outward edge — it points */
   .dkey::before{content:"";position:absolute;opacity:.3;transition:opacity .15s;border-radius:2px;
     background:linear-gradient(90deg,transparent,rgba(120,245,255,.9),transparent)}
   #up::before{top:3px;left:10px;right:10px;height:2px}
@@ -52,7 +52,6 @@
   #left::before,#right::before{background:linear-gradient(180deg,transparent,rgba(120,245,255,.9),transparent)}
   #left::before{left:3px;top:10px;bottom:10px;width:2px}
   #right::before{right:3px;top:10px;bottom:10px;width:2px}
-  /* a press ripples outward — the same language as the world */
   .dkey::after{content:"";position:absolute;inset:0;border-radius:inherit;border:1px solid rgba(150,250,255,.9);opacity:0;pointer-events:none}
   .dkey.pulse::after{animation:keyRipple .5s ease-out}
   @keyframes keyRipple{0%{opacity:.85;transform:scale(1)}100%{opacity:0;transform:scale(2)}}
@@ -73,7 +72,7 @@
   #eye svg{overflow:visible;transition:transform .16s ease-in}
   #eye .pupil{transform-origin:13px 9px;transition:transform .16s}
   #eye.held{background:rgba(45,220,255,.3);border-color:rgba(160,255,255,.85);animation:none}
-  #eye.held svg{transform:scaleY(.12)}   /* the eye closes */
+  #eye.held svg{transform:scaleY(.12)}
   #eye.held .pupil{transform:scale(.2)}
   #eye:focus-visible{outline:1px solid rgba(170,255,255,.9);outline-offset:3px}
   #eyeLabel{position:absolute;right:max(10px,env(safe-area-inset-right));bottom:calc(max(14px,env(safe-area-inset-bottom)) + 44px);
@@ -93,13 +92,14 @@
 </head>
 <body>
 <div id="ui">
-  <div id="title">Dimensional Awakening<span class="sub"> / Fold Study V6</span></div>
+  <div id="title">Dimensional Awakening<span class="sub"> / V7</span></div>
+  <div id="dimLabel">2D</div>
   <div id="count">LIGHTS 0 / 3</div>
   <div id="pips"><i></i><i></i><i></i></div>
   <div id="moveStatus">TAP AN ARROW TO MOVE</div>
   <div id="beaconArrow"><span>&#8595;</span></div>
-  <div id="prompt">Move toward the beacon.</div>
-  <div id="foldHint">MOVE &middot; WASD / ARROWS / PAD<br>FOLD SPACE &middot; GRAB THE CYAN SEAM</div>
+  <div id="prompt">Move toward the light.</div>
+  <div id="foldHint">MOVE &middot; WASD / ARROWS / PAD<br>FOLD &middot; GRAB THE GLOWING EDGE</div>
   <div id="dpad">
     <button class="dkey" id="up" aria-label="Move up"><span>&#8593;</span></button>
     <button class="dkey" id="left" aria-label="Move left"><span>&#8592;</span></button>
@@ -122,10 +122,19 @@
 <script type="module">
 import * as THREE from 'three';
 
+// =====================================================================
+// DIMENSIONAL AWAKENING V7
+// Stage 1 is a flat sheet seen straight from above (2D). Folding lifts the
+// far half of the sheet toward you. Crossing the fold is the birth of depth:
+// the camera falls out of the sky and lands behind you, the world extrudes,
+// and you are standing on the paper (3D). Stage 2 lives in that 3D room.
+// One variable, `dim` (0 -> 1), drives the whole shift.
+// =====================================================================
+
 // ---------- renderer / scene ----------
 const scene=new THREE.Scene();
-scene.fog=new THREE.FogExp2(0x030611,.042);
-const camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,.1,300);
+scene.fog=new THREE.FogExp2(0x030611,0);
+const camera=new THREE.PerspectiveCamera(4,innerWidth/innerHeight,.1,900);
 const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.setSize(innerWidth,innerHeight);
@@ -135,19 +144,21 @@ renderer.toneMappingExposure=1.15;
 document.body.appendChild(renderer.domElement);
 const clock=new THREE.Clock();
 const world=new THREE.Group(); scene.add(world);
-
 function portraitMode(){return innerHeight>innerWidth*1.15;}
+const ease=k=>k<=0?0:k>=1?1:k*k*(3-2*k);
 
 // ---------- state ----------
-const FOLD_OPEN=0.68;          // fold amount at which the seam becomes crossable
+const FOLD_OPEN=0.68;
 let fold=0, foldTarget=0;
 let dragging=false, dragStartX=0, dragStartFold=0;
 const playerPos=new THREE.Vector3(-7,0,-1);
 const velocity=new THREE.Vector3();
 let seeds=0, awakened=0, moveCount=0;
-let crossT=-99, ripIdx=0, moveAccum=0;   // crossing-moment clock & ripple ring buffer
+let crossed=false, dimT=-99, dim=0;     // the dimensional shift
+let ripIdx=0, moveAccum=0;
 const keys={};
-const held={x:0,z:0};          // d-pad hold state
+const held={x:0,z:0};
+const fwd=new THREE.Vector3(0,0,-1), rgt=new THREE.Vector3(1,0,0); // screen-relative axes
 
 const promptEl=document.getElementById('prompt');
 const countEl=document.getElementById('count');
@@ -155,8 +166,10 @@ const flashEl=document.getElementById('flash');
 const dpadEl=document.getElementById('dpad');
 const beaconArrow=document.getElementById('beaconArrow');
 const moveStatus=document.getElementById('moveStatus');
+const dimLabel=document.getElementById('dimLabel');
+const pipsEl=document.getElementById('pips');
 
-// ---------- audio (unlocked by first gesture) ----------
+// ---------- audio ----------
 let AC=null, foldOsc=null, foldGain=null;
 function audio(){
   if(AC) return AC;
@@ -179,32 +192,39 @@ function blip(freq,dur=.09,gain=.12,type='triangle',pan=0){
   o.connect(g); tail.connect(ac.destination); o.start(); o.stop(ac.currentTime+dur);
 }
 function chime(){[523,659,784,1046].forEach((f,i)=>setTimeout(()=>blip(f,.35,.09,'sine'),i*70));}
+function depthChord(){[130,196,262,330,392,523].forEach((f,i)=>setTimeout(()=>blip(f,1.6,.07,'sine'),i*140));}
+
+// ---------- UI helpers ----------
+function setPrompt(t){if(promptEl.textContent===t)return;
+  promptEl.classList.add('swap');
+  setTimeout(()=>{promptEl.textContent=t;promptEl.classList.remove('swap')},220);}
+function setPips(n){[...pipsEl.children].forEach((el,i)=>el.classList.toggle('lit',i<n));}
+function pulseFlash(){flashEl.style.opacity=.5;setTimeout(()=>flashEl.style.opacity=0,90)}
 
 // ---------- starfield ----------
 {
-  const n=1200, pos=new Float32Array(n*3);
-  for(let i=0;i<n;i++){const r=35+Math.random()*90,a=Math.random()*Math.PI*2,b=Math.acos(2*Math.random()-1);
+  const n=1400, pos=new Float32Array(n*3);
+  for(let i=0;i<n;i++){const r=40+Math.random()*120,a=Math.random()*Math.PI*2,b=Math.acos(2*Math.random()-1);
     pos[i*3]=Math.sin(b)*Math.cos(a)*r;pos[i*3+1]=Math.cos(b)*r*.7;pos[i*3+2]=Math.sin(b)*Math.sin(a)*r;}
   const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));
-  const stars=new THREE.Points(g,new THREE.PointsMaterial({color:0x78dfff,size:.12,transparent:true,opacity:.42,depthWrite:false}));
+  const stars=new THREE.Points(g,new THREE.PointsMaterial({color:0x78dfff,size:.14,transparent:true,opacity:.42,depthWrite:false}));
   scene.add(stars); scene.userData.stars=stars;
 }
 
-// ---------- foldable plane ----------
+// ---------- the sheet ----------
 const planeGeo=new THREE.PlaneGeometry(24,18,120,90); planeGeo.rotateX(-Math.PI/2);
 const MAX_RIP=6;
 const planeMat=new THREE.ShaderMaterial({
   transparent:true, side:THREE.DoubleSide,
-  uniforms:{uTime:{value:0},uFold:{value:0},uAwake:{value:0},
+  uniforms:{uTime:{value:0},uFold:{value:0},uAwake:{value:0},uDim:{value:0},
     uRip:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector4(0,0,-99,0))}},
   vertexShader:`
     uniform float uTime; uniform float uFold; uniform float uAwake;
     uniform vec4 uRip[${MAX_RIP}];
-    varying vec3 vPos; varying float vRip;
+    varying vec3 vPos; varying float vRip; varying float vSide;
     void main(){
       vec3 p=position;
       float theta=uFold*1.42;
-      // touch ripples: every player step is a ring expanding through the grid
       float rip=0.0;
       for(int i=0;i<${MAX_RIP};i++){
         float age=uTime-uRip[i].z;
@@ -214,14 +234,15 @@ const planeMat=new THREE.ShaderMaterial({
         }
       }
       p.y+=rip*.22;
+      vSide=step(0.0,position.x);
       if(p.x>0.0){ float x=p.x; p.x=cos(theta)*x; p.y+=sin(theta)*x; }
       p.y+=sin(length(position.xz)*1.2-uTime*1.8)*.06*(.2+uAwake);
       vPos=p; vRip=rip;
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);
     }`,
   fragmentShader:`
-    uniform float uTime; uniform float uFold; uniform float uAwake;
-    varying vec3 vPos; varying float vRip;
+    uniform float uTime; uniform float uFold; uniform float uAwake; uniform float uDim;
+    varying vec3 vPos; varying float vRip; varying float vSide;
     float grid(float x,float s){float q=abs(fract(x/s-.5)-.5)/fwidth(x/s);return 1.-min(q,1.);}
     void main(){
       float g=max(grid(vPos.x,1.0),grid(vPos.z,1.0));
@@ -229,60 +250,63 @@ const planeMat=new THREE.ShaderMaterial({
       vec3 a=vec3(.015,.055,.075); vec3 b=vec3(.02,.28,.34);
       float pulse=.5+.5*sin(uTime*.7+vPos.x*.3-vPos.z*.22);
       vec3 col=mix(a,b,g*.48+fine)+vec3(.03,.13,.15)*pulse*uAwake;
-      col+=vec3(.1,.9,1.2)*exp(-abs(vPos.x)*1.9)*uFold*.65;
+      // the edge of the paper is always luminous; folding makes the lifted
+      // half brighter (it is coming toward you)
+      col+=vec3(.1,.9,1.2)*exp(-abs(vPos.x)*2.2)*(.35+uFold*.9);
+      col*=1.0+.9*uFold*vSide*(1.0-uDim);
       col+=vec3(.2,1.0,1.1)*vRip*.9;
-      // awakening makes color stop being one describable thing:
-      // interference moire + slow channel drift, scaled by uAwake
       float m=sin(vPos.x*6.0+uTime*.6)*sin(vPos.z*6.0-uTime*.5);
-      vec3 wrong=vec3(.55+.45*sin(uTime*.31+vPos.z*.4),
-                      .35+.35*sin(uTime*.23+vPos.x*.35+2.1),
-                      .7+.3*sin(uTime*.27+3.9));
+      vec3 wrong=vec3(.55+.45*sin(uTime*.31+vPos.z*.4),.35+.35*sin(uTime*.23+vPos.x*.35+2.1),.7+.3*sin(uTime*.27+3.9));
       col+=wrong*smoothstep(.45,1.0,m)*.24*uAwake*(g*.9+fine+.25);
       float drift=uAwake*.45*(.5+.5*sin(uTime*.4+length(vPos.xz)*.35));
       col=mix(col,col.brg,drift);
-      gl_FragColor=vec4(col,.92);
+      gl_FragColor=vec4(col,.94);
     }`
 });
 world.add(new THREE.Mesh(planeGeo,planeMat));
-// ripples live in unfolded plane coordinates, same space as playerPos
 function emitRipple(x,z,s=1){
   planeMat.uniforms.uRip.value[ripIdx].set(x,z,clock.elapsedTime,s);
   ripIdx=(ripIdx+1)%MAX_RIP;
 }
 
-// ---------- seam: barrier, grab handle, crossing point ----------
+// ---------- the edge (seam): a glowing line on the sheet; a wall of light in 3D ----------
 const seamMat=new THREE.MeshBasicMaterial({color:0x60f7ff,transparent:true,opacity:.9});
-const seam=new THREE.Mesh(new THREE.BoxGeometry(.07,.08,18),seamMat);seam.position.y=.06;world.add(seam);
-const seamHalo=new THREE.Mesh(new THREE.BoxGeometry(.3,.02,18),
-  new THREE.MeshBasicMaterial({color:0x20d9ff,transparent:true,opacity:.09,blending:THREE.AdditiveBlending}));
-seamHalo.position.y=.04;world.add(seamHalo);
-// The seam is a wall of light while unfolded — the obstacle that motivates folding.
+const seam=new THREE.Mesh(new THREE.BoxGeometry(.16,.06,18),seamMat);seam.position.y=.05;world.add(seam);
+const seamHalo=new THREE.Mesh(new THREE.BoxGeometry(.7,.02,18),
+  new THREE.MeshBasicMaterial({color:0x20d9ff,transparent:true,opacity:.14,blending:THREE.AdditiveBlending}));
+seamHalo.position.y=.03;world.add(seamHalo);
 const seamWall=new THREE.Mesh(new THREE.PlaneGeometry(18,2.6),
-  new THREE.MeshBasicMaterial({color:0x2ee9ff,transparent:true,opacity:.14,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false}));
+  new THREE.MeshBasicMaterial({color:0x2ee9ff,transparent:true,opacity:0,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false}));
 seamWall.rotation.y=Math.PI/2; seamWall.position.y=1.3; world.add(seamWall);
-// Invisible fat collider so grabbing the seam is forgiving on a phone.
-const seamGrab=new THREE.Mesh(new THREE.BoxGeometry(3.2,5,18),new THREE.MeshBasicMaterial({visible:false}));
+const seamGrab=new THREE.Mesh(new THREE.BoxGeometry(3.4,5,18),new THREE.MeshBasicMaterial({visible:false}));
 seamGrab.position.y=1; world.add(seamGrab);
 
-// ---------- player ----------
-const pCore=new THREE.Mesh(new THREE.IcosahedronGeometry(.34,2),
+// ---------- player: a flat disc in 2D, a sphere in 3D ----------
+const pDisc=new THREE.Mesh(new THREE.CircleGeometry(.42,40),new THREE.MeshBasicMaterial({color:0xeaffff}));
+pDisc.rotation.x=-Math.PI/2;pDisc.position.y=.08;
+const pRing=new THREE.Mesh(new THREE.RingGeometry(.55,.66,48),
+  new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.55,side:THREE.DoubleSide}));
+pRing.rotation.x=-Math.PI/2;pRing.position.y=.07;
+const pCore=new THREE.Mesh(new THREE.IcosahedronGeometry(.36,2),
   new THREE.MeshStandardMaterial({color:0xdfffff,emissive:0x49e9ff,emissiveIntensity:3,roughness:.18,metalness:.15}));
-const pHalo=new THREE.Mesh(new THREE.SphereGeometry(.58,24,24),
+const pHalo=new THREE.Mesh(new THREE.SphereGeometry(.6,24,24),
   new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.075,blending:THREE.AdditiveBlending,depthWrite:false}));
-const player=new THREE.Group();player.add(pCore,pHalo);world.add(player);
+const pShadow=new THREE.Mesh(new THREE.CircleGeometry(.5,32),
+  new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:0}));
+pShadow.rotation.x=-Math.PI/2;pShadow.position.y=.02;
+const p3=new THREE.Group();p3.add(pCore,pHalo);
+const player=new THREE.Group();player.add(pDisc,pRing,p3,pShadow);world.add(player);
 
 scene.add(new THREE.HemisphereLight(0x8ceeff,0x04040c,1.3));
 const point=new THREE.PointLight(0x66f5ff,20,18);point.position.set(-4,6,2);scene.add(point);
 
-// ---------- seeds ----------
+// ---------- the lights ----------
+// L1 teaches movement. L2/L3 are beyond the edge — reachable only through the fold.
 const seedData=[
- {p:new THREE.Vector3(-3,0,-1)},   // teaches movement (same side as player)
- {p:new THREE.Vector3(7,0,4)},     // beyond the seam — requires folding across
- {p:new THREE.Vector3(3,0,-5)}     // beyond the seam
+ {p:new THREE.Vector3(-3,0,-1)},
+ {p:new THREE.Vector3(4.6,0,2.7)},
+ {p:new THREE.Vector3(5.0,0,-2.7)}
 ];
-// One rule the player can trust throughout: there is always exactly one
-// light to follow. Every seed carries the full beacon treatment (beam, glow),
-// but only the current target's is lit.
 const seedMeshes=[], beams=[], glows=[];
 seedData.forEach((s,i)=>{
  const g=new THREE.Group();
@@ -304,71 +328,65 @@ const guideLine=new THREE.Line(
   new THREE.LineDashedMaterial({color:0x73faff,transparent:true,opacity:.72,dashSize:.35,gapSize:.22}));
 guideLine.computeLineDistances();world.add(guideLine);
 
-// landmarks so motion is visually undeniable; those on the right half must
-// ride the fold with the plane instead of floating in place
+// ---------- landmarks: flat marks in 2D that extrude into pillars in 3D ----------
 const landmarks=[];
-for(let i=0;i<18;i++){
+for(let i=0;i<22;i++){
  const x=-10+Math.random()*20,z=-7+Math.random()*14;
  if(Math.abs(x)<1.6) continue;
- const h=.3+Math.random()*1.6;
- const m=new THREE.Mesh(new THREE.CylinderGeometry(.07,.16,h,5),
-   new THREE.MeshStandardMaterial({color:0x16384a,emissive:0x0b2330,emissiveIntensity:.6,roughness:.72,metalness:.3}));
+ if(x>2&&Math.abs(z)<2.2) continue;         // keep the room's flight path clear
+ if(Math.abs(x-6.6)<1.2||x>9.6) continue;   // and the wall / screen
+ const h=.5+Math.random()*1.8;
+ const m=new THREE.Mesh(new THREE.CylinderGeometry(.09,.2,h,6),
+   new THREE.MeshStandardMaterial({color:0x16384a,emissive:0x1a4a5e,emissiveIntensity:.7,roughness:.72,metalness:.3}));
  m.position.set(x,h/2,z);world.add(m);
  landmarks.push({m,x,z,h});
 }
 function updateLandmarks(){
  const th=fold*1.42, up=new THREE.Vector3(-Math.sin(th),Math.cos(th),0);
+ const sy=THREE.MathUtils.lerp(.04,1,dim);
  for(const l of landmarks){
-   if(l.x<=0)continue;
+   l.m.scale.y=sy;
+   if(l.x<=0){l.m.position.set(l.x,l.h*sy/2,l.z);l.m.rotation.z=0;continue;}
    const gp=foldedPoint(new THREE.Vector3(l.x,0,l.z));
-   l.m.position.copy(gp).addScaledVector(up,l.h/2);
+   l.m.position.copy(gp).addScaledVector(up,l.h*sy/2);
    l.m.rotation.z=th;
  }
 }
 
-// ---------- STAGE 2: the two-gap wall ----------
-// After the third light, the world pours dots at a wall with two gaps on the
-// left half (which never folds). The one rule, never stated in math terms:
-// the lights behave differently when watched. Watched (player near the gaps,
-// eyes open) -> two piles. Unwatched -> stripes. Standing in a gap blocks it.
-//
-// The puzzle is legible: the detector shows a ghost OUTLINE of the shape it
-// wants, and the player's job is to make the glowing bars fill it. Three
-// rounds, each solvable only in its mode: two piles -> stripes -> one pile.
+function foldedPoint(src){
+  const p=src.clone();
+  if(p.x>0){const th=fold*1.42,x=p.x;p.x=Math.cos(th)*x;p.y+=Math.sin(th)*x;}
+  return p;
+}
+
+// ---------- STAGE 2: the two-gap wall, in the 3D room ----------
 const S2={
   active:false,eyes:false,done:0,round:0,spawnT:0,startT:0,roundT:0,
   match:0,hold:0,hinted:false,arrived:false,eyeUsed:false,lastBlk:0,
-  dots:[],bins:[],ghost:[],
-  center:new THREE.Vector3(-6.6,0,0)
+  dots:[],bins:[],gapPads:[],center:new THREE.Vector3(6.6,0,0)
 };
-const S2_BARX=-5, S2_DETX=-9.6, S2_EMIT=new THREE.Vector3(-1.6,0,0);
-// fringe spacing 3.4 with bands at +-1.7 puts each watched band exactly on a
-// dark fringe, so the watched and unwatched patterns are visibly disjoint
+const S2_EMIT=new THREE.Vector3(3.0,0,0), S2_BARX=6.6, S2_SCRX=10.8;
 const S2_GAPZ=1.6, S2_GAPHW=.9, S2_BAND=1.7, S2_K=Math.PI/3.4, S2_WATCH_R=4.6;
-const S2_HOLD=2.6, S2_THRESH=.66;
+const S2_HOLD=2.2, S2_THRESH=.6, S2_NB=40, S2_HALF=5;
 const s2Group=new THREE.Group(); s2Group.visible=false; world.add(s2Group);
 const eyeBtn=document.getElementById('eye'), veil=document.getElementById('veil'), eyeLabel=document.getElementById('eyeLabel');
-
 const gpdf=(z,mu,s)=>Math.exp(-(z-mu)*(z-mu)/(2*s*s));
-// each round: the target shape (as a function of detector z) and the hint
-// that appears only if the player is stuck
 const S2_ROUNDS=[
-  {name:'piles',  profile:z=>gpdf(z,S2_BAND,.5)+gpdf(z,-S2_BAND,.5),
-   intro:'Make the lights land like the outline.',
-   hint:'Stand close to the gaps. Watch them.'},
-  {name:'stripes',profile:z=>Math.pow(Math.cos(S2_K*z),2)*Math.exp(-z*z/20.5),
-   intro:'Now this shape.',
+  {profile:z=>gpdf(z,S2_BAND,.5)+gpdf(z,-S2_BAND,.5),
+   intro:'Paint the picture on the screen.',
+   hint:'Stand close to the openings. Watch the lights.'},
+  {profile:z=>Math.pow(Math.cos(S2_K*z),2)*Math.exp(-z*z/20.5),
+   intro:'Now this picture.',
    hint:'They behave differently when you are far away. Or when your eyes are closed.'},
-  {name:'one',    profile:z=>gpdf(z,-S2_BAND,.9),
+  {profile:z=>gpdf(z,-S2_BAND,.9),
    intro:'One more. The wall has two openings.',
    hint:'Walk into one of the glowing openings in the wall. Block it with your body.'}
 ];
-
 function gauss(mu,sig){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();
   return mu+sig*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
 function sampleFringe(){
   for(let i=0;i<60;i++){
-    const z=-6.4+12.8*Math.random();
+    const z=-S2_HALF+2*S2_HALF*Math.random();
     if(Math.random()<Math.pow(Math.cos(S2_K*z),2)*Math.exp(-z*z/20.5))return z;
   }
   return 0;
@@ -381,28 +399,63 @@ function s2BlockedGap(){
   return 0;
 }
 
+// the screen: a canvas texture. Landings splat and fade; the target is a
+// ghost picture drawn underneath; a progress bar fills along the bottom.
+const SCR_W=640, SCR_H=256;
+const splatCv=document.createElement('canvas'); splatCv.width=SCR_W; splatCv.height=SCR_H;
+const scrCv=document.createElement('canvas'); scrCv.width=SCR_W; scrCv.height=SCR_H;
+const splatCtx=splatCv.getContext('2d'), scrCtx=scrCv.getContext('2d');
+const scrTex=new THREE.CanvasTexture(scrCv); scrTex.colorSpace=THREE.SRGBColorSpace;
+function splat(z,strength=1){
+  const u=(z+S2_HALF)/(2*S2_HALF)*SCR_W, v=SCR_H*(.5+gauss(0,.07));
+  const r=16*strength;
+  const g=splatCtx.createRadialGradient(u,v,0,u,v,r);
+  g.addColorStop(0,'rgba(220,255,255,.95)');g.addColorStop(.4,'rgba(120,240,255,.55)');g.addColorStop(1,'rgba(60,200,255,0)');
+  splatCtx.globalCompositeOperation='lighter';splatCtx.fillStyle=g;
+  splatCtx.beginPath();splatCtx.arc(u,v,r,0,Math.PI*2);splatCtx.fill();
+}
+function drawScreen(dt,t){
+  // fade old landings
+  splatCtx.globalCompositeOperation='destination-out';
+  splatCtx.fillStyle=`rgba(0,0,0,${1-Math.exp(-dt*.28)})`;
+  splatCtx.fillRect(0,0,SCR_W,SCR_H);
+  // compose: backing, ghost picture, landings, progress
+  scrCtx.globalCompositeOperation='source-over';
+  scrCtx.fillStyle='#04101a';scrCtx.fillRect(0,0,SCR_W,SCR_H);
+  if(S2.target&&S2.done<3){
+    const prog=Math.min(1,S2.hold/S2_HOLD);
+    const bw=SCR_W/S2_NB;
+    for(let i=0;i<S2_NB;i++){
+      const a=S2.target[i]*(.26+.45*S2.match+.25*prog*(.6+.4*Math.sin(t*9)));
+      scrCtx.fillStyle=`rgba(${140+100*prog|0},250,255,${a})`;
+      const h=SCR_H*(.15+.7*S2.target[i]);
+      scrCtx.fillRect(i*bw+1,(SCR_H-h)/2,bw-2,h);
+    }
+    scrCtx.fillStyle='rgba(255,255,255,.9)';
+    scrCtx.fillRect(0,SCR_H-7,SCR_W*prog,7);
+  }
+  scrCtx.globalCompositeOperation='lighter';
+  scrCtx.drawImage(splatCv,0,0);
+  scrTex.needsUpdate=true;
+}
+
 function buildStage2(){
-  // a wall that reads as a wall on a phone: solid-ish slab with a bright
-  // top edge, split into segments that leave two openings at z = +-S2_GAPZ
+  // the wall with two openings, at eye level in the room
   const wallMat=new THREE.MeshBasicMaterial({color:0x1a9fbf,transparent:true,opacity:.5,depthWrite:false});
   const edgeMat=new THREE.MeshBasicMaterial({color:0xaefcff});
-  const segs=[[-9,-S2_GAPZ-S2_GAPHW],[-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW],[S2_GAPZ+S2_GAPHW,9]];
-  S2.wallSegs=[];
+  const segs=[[-7,-S2_GAPZ-S2_GAPHW],[-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW],[S2_GAPZ+S2_GAPHW,7]];
   for(const [z0,z1] of segs){
-    const w=new THREE.Mesh(new THREE.BoxGeometry(.22,1.9,z1-z0),wallMat.clone());
-    w.position.set(S2_BARX,.95,(z0+z1)/2);s2Group.add(w);S2.wallSegs.push(w);
-    const e=new THREE.Mesh(new THREE.BoxGeometry(.26,.04,z1-z0),edgeMat);
-    e.position.set(S2_BARX,1.91,(z0+z1)/2);s2Group.add(e);
+    const w=new THREE.Mesh(new THREE.BoxGeometry(.24,2.4,z1-z0),wallMat.clone());
+    w.position.set(S2_BARX,1.2,(z0+z1)/2);s2Group.add(w);
+    const e=new THREE.Mesh(new THREE.BoxGeometry(.28,.05,z1-z0),edgeMat);
+    e.position.set(S2_BARX,2.42,(z0+z1)/2);s2Group.add(e);
   }
-  // doorposts + a glowing floor pad in each opening: "you can stand here"
   const postMat=new THREE.MeshBasicMaterial({color:0xdfffff});
   for(const z of [-S2_GAPZ-S2_GAPHW,-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW,S2_GAPZ+S2_GAPHW]){
-    const p=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,2.3,8),postMat);
-    p.position.set(S2_BARX,1.15,z);s2Group.add(p);
+    const p=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,2.6,8),postMat);
+    p.position.set(S2_BARX,1.3,z);s2Group.add(p);
   }
-  S2.gapPads=[];
   for(const g of [1,-1]){
-    // a solid doormat, not an additive glow: it has to read over a bright grid
     const pad=new THREE.Mesh(new THREE.BoxGeometry(1.9,.08,S2_GAPHW*2-.1),
       new THREE.MeshBasicMaterial({color:0x8ffcff,transparent:true,opacity:.45}));
     pad.position.set(S2_BARX,.04,g*S2_GAPZ);
@@ -413,19 +466,15 @@ function buildStage2(){
     new THREE.MeshStandardMaterial({color:0xffffff,emissive:0x55ffff,emissiveIntensity:4,roughness:.1}));
   em.position.set(S2_EMIT.x,.8,S2_EMIT.z);s2Group.add(em);S2.emitter=em;
   const el=new THREE.PointLight(0x6cffff,20,9);el.position.copy(em.position);s2Group.add(el);
-  // detector columns (live) + ghost outline (target) around each column
-  const binGeo=new THREE.BoxGeometry(.24,1,.26);
-  const ghostGeo=new THREE.EdgesGeometry(new THREE.BoxGeometry(.34,1,.3));
-  for(let i=0;i<44;i++){
-    const z=-6.45+i*.3;
-    const m=new THREE.Mesh(binGeo,new THREE.MeshStandardMaterial({color:0x0a2a38,
-      emissive:0x28d9ff,emissiveIntensity:.15,roughness:.4}));
-    m.position.set(S2_DETX,.05,z);m.scale.y=.08;
-    s2Group.add(m);S2.bins.push({m,z,n:0});
-    const g=new THREE.LineSegments(ghostGeo,new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:.2}));
-    g.position.set(S2_DETX,.05,z);g.scale.y=.08;
-    s2Group.add(g);S2.ghost.push(g);
-  }
+  // the screen at the back of the room, facing the player
+  const scr=new THREE.Mesh(new THREE.PlaneGeometry(2*S2_HALF+1,4.4),
+    new THREE.MeshBasicMaterial({map:scrTex,transparent:false}));
+  scr.rotation.y=-Math.PI/2;scr.position.set(S2_SCRX,2.3,0);s2Group.add(scr);
+  const frame=new THREE.Mesh(new THREE.BoxGeometry(.12,4.7,2*S2_HALF+1.3),new THREE.MeshBasicMaterial({color:0x8ffcff}));
+  frame.position.set(S2_SCRX+.1,2.3,0);s2Group.add(frame);
+  const scrLight=new THREE.PointLight(0x6cffff,12,10);scrLight.position.set(S2_SCRX-1.5,2.5,0);s2Group.add(scrLight);
+  // histogram bins (for matching; the visual is the screen)
+  for(let i=0;i<S2_NB;i++)S2.bins.push({z:-S2_HALF+(i+.5)*(2*S2_HALF/S2_NB),n:0});
   // dot pool
   const dotGeo=new THREE.SphereGeometry(.11,8,8);
   for(let i=0;i<16;i++){
@@ -434,17 +483,13 @@ function buildStage2(){
     S2.dots.push({m,on:false,mode:'',t:0,gapZ:0,landZ:0,waveAt:0});
   }
 }
-
 function s2SetRound(r){
   S2.round=r;S2.roundT=clock.elapsedTime;S2.hold=0;S2.hinted=false;
   const R=S2_ROUNDS[r];
-  // target heights on the same scale as the live bars
   let mx=0;const tp=S2.bins.map(b=>{const v=R.profile(b.z);mx=Math.max(mx,v);return v;});
   S2.target=tp.map(v=>v/mx);
-  S2.ghost.forEach((g,i)=>{g.userData.h=.08+S2.target[i]*2.1;});
   if(S2.arrived)setPrompt(R.intro);
 }
-
 function startStage2(){
   if(S2.active)return;
   buildStage2();
@@ -452,97 +497,66 @@ function startStage2(){
   countEl.textContent='PATTERNS 0 / 3';setPips(0);
   eyeBtn.style.display='grid';eyeLabel.style.display='block';
   s2SetRound(0);
-  setPrompt('Something is pouring new lights into the world. Go close.');
+  setPrompt('Something is pouring lights at the wall. Watch the screen.');
   emitRipple(S2_EMIT.x,S2_EMIT.z,1.6);
 }
-
 function s2Hit(z){
-  let bi=Math.round((z+6.45)/.3);
-  if(bi>=0&&bi<S2.bins.length){S2.bins[bi].n=Math.min(S2.bins[bi].n+1,26);}
-  blip(420+Math.abs(z)*60,.12,S2.eyes?.14:.06,'sine',z/7);
+  const bi=Math.floor((z+S2_HALF)/(2*S2_HALF)*S2_NB);
+  if(bi>=0&&bi<S2_NB)S2.bins[bi].n=Math.min(S2.bins[bi].n+1,26);
+  splat(z);
+  blip(420+Math.abs(z)*60,.12,S2.eyes?.14:.06,'sine',z/S2_HALF);
 }
-
 function s2RoundDone(){
   S2.done++;countEl.textContent=`PATTERNS ${S2.done} / 3`;setPips(S2.done);
   pulseFlash();chime();
-  for(let i=0;i<S2.bins.length;i+=6)emitRipple(S2_DETX,S2.bins[i].z,.5);
+  for(let i=0;i<S2_NB;i+=6)emitRipple(S2_SCRX-.5,S2.bins[i].z,.5);
   if(S2.done>=3){
     setPrompt('They knew when you were watching.');
-    setTimeout(()=>setPrompt('What else knows?'),3600);
-    setTimeout(()=>setPrompt('DIMENSIONAL AWAKENING — to be continued'),7600);
-    S2.ghost.forEach(g=>g.visible=false);
+    setTimeout(()=>setPrompt('You were never moving through space.'),4000);
+    setTimeout(()=>setPrompt('You were changing what space meant.'),7500);
+    setTimeout(()=>setPrompt('DIMENSIONAL AWAKENING'),11000);
   }else s2SetRound(S2.done);
 }
-
 function updateStage2(dt,t){
   if(!S2.active)return;
-  S2.emitter.rotation.y=t*1.1;
-  S2.emitter.position.y=.8+.1*Math.sin(t*2.3);
-  // when the player first reaches the apparatus, name the goal once
-  if(!S2.arrived&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<5.5){
+  S2.emitter.rotation.y=t*1.1;S2.emitter.position.y=.8+.1*Math.sin(t*2.3);
+  if(!S2.arrived&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<6){
     S2.arrived=true;S2.roundT=t;setPrompt(S2_ROUNDS[S2.round].intro);
   }
-  // spawn
   S2.spawnT-=dt;
   if(S2.spawnT<=0){
     S2.spawnT=.085;
     const d=S2.dots.find(d=>!d.on);
     if(d){
-      const blocked=s2BlockedGap();
-      const watched=!S2.eyes&&s2NearSlits();
-      if(blocked!==0){
-        d.mode='particle';const open=-blocked;
-        d.gapZ=open*S2_GAPZ;d.landZ=gauss(open*S2_BAND,.9);
-      }else if(watched){
-        d.mode='particle';const g=Math.random()<.5?1:-1;
-        d.gapZ=g*S2_GAPZ;d.landZ=gauss(g*S2_BAND,.5);
-      }else{
-        d.mode='wave';d.gapZ=0;d.landZ=sampleFringe();
-      }
+      const blocked=s2BlockedGap(), watched=!S2.eyes&&s2NearSlits();
+      if(blocked!==0){d.mode='particle';const open=-blocked;d.gapZ=open*S2_GAPZ;d.landZ=gauss(open*S2_BAND,.9);}
+      else if(watched){d.mode='particle';const g=Math.random()<.5?1:-1;d.gapZ=g*S2_GAPZ;d.landZ=gauss(g*S2_BAND,.5);}
+      else{d.mode='wave';d.gapZ=0;d.landZ=sampleFringe();}
       d.on=true;d.t=0;d.waveAt=0;d.m.visible=true;d.m.material.opacity=.95;
-      d.m.position.set(S2_EMIT.x,.7,S2_EMIT.z+gauss(0,.15));
+      d.m.position.set(S2_EMIT.x,.8,S2_EMIT.z+gauss(0,.15));
     }
   }
-  // fly
   for(const d of S2.dots){
     if(!d.on)continue;
     d.t+=dt;
-    const A=.5, B=.5; // seconds emitter->barrier, barrier->detector
+    const A=.5,B=.55;
     if(d.t<A){
       const k=d.t/A;
       d.m.position.x=THREE.MathUtils.lerp(S2_EMIT.x,S2_BARX,k);
       d.m.position.z=THREE.MathUtils.lerp(S2_EMIT.z,d.gapZ,k);
-      d.m.position.y=.7+Math.sin(k*Math.PI)*.15;
+      d.m.position.y=.8+Math.sin(k*Math.PI)*.3;
     }else if(d.mode==='wave'){
-      // the unobserved dot dissolves into ripples through BOTH gaps,
-      // then recondenses as a landing on the detector
-      if(!d.waveAt){
-        d.waveAt=t;d.m.visible=false;
-        emitRipple(S2_BARX,S2_GAPZ,.4);emitRipple(S2_BARX,-S2_GAPZ,.4);
-      }
-      if(t-d.waveAt>.45){s2Hit(d.landZ);d.on=false;}
+      if(!d.waveAt){d.waveAt=t;d.m.visible=false;emitRipple(S2_BARX,S2_GAPZ,.4);emitRipple(S2_BARX,-S2_GAPZ,.4);}
+      if(t-d.waveAt>.5){s2Hit(d.landZ);d.on=false;}
     }else if(d.t<A+B){
       const k=(d.t-A)/B;
-      d.m.position.x=THREE.MathUtils.lerp(S2_BARX,S2_DETX,k);
+      d.m.position.x=THREE.MathUtils.lerp(S2_BARX,S2_SCRX-.15,k);
       d.m.position.z=THREE.MathUtils.lerp(d.gapZ,d.landZ,k);
-      d.m.position.y=.7-k*.45;
-      d.m.material.opacity=.95-k*.3;
-    }else{
-      s2Hit(d.landZ);d.on=false;d.m.visible=false;
-    }
+      d.m.position.y=THREE.MathUtils.lerp(.8,2.3,k);
+    }else{s2Hit(d.landZ);d.on=false;d.m.visible=false;}
   }
-  // live histogram: forgets quickly (half-life ~2.5s) so the shape follows
-  // the player's choices within a few seconds
   let total=0;
-  for(const b of S2.bins){
-    b.n*=Math.exp(-dt*.28);total+=b.n;
-    const h=.08+b.n*.085;
-    b.m.scale.y+=(h-b.m.scale.y)*(1-Math.pow(.001,dt));
-    b.m.position.y=b.m.scale.y/2;
-    b.m.material.emissiveIntensity=.15+b.n*.09;
-  }
-  // the openings: pulsing floor pads, flaring white while the player stands
-  // in one; the wall segment beside a blocked opening glows too
+  for(const b of S2.bins){b.n*=Math.exp(-dt*.22);total+=b.n;}
   const blk=s2BlockedGap();
   for(const gp of S2.gapPads){
     const inIt=blk===gp.g;
@@ -555,8 +569,8 @@ function updateStage2(dt,t){
     if(blk!==0){blip(660,.18,.1,'sine');emitRipple(S2_BARX,blk*S2_GAPZ,.9);
       if(S2.round===2&&S2.done<3)setPrompt('You are in the way. Now the lights have one door.');}
   }
+  drawScreen(dt,t);
   if(S2.done>=3)return;
-  // how well does the live shape match the ghost? (L1 between distributions)
   let m=0;
   if(total>14){
     let tsum=0;for(const v of S2.target)tsum+=v;
@@ -564,29 +578,12 @@ function updateStage2(dt,t){
     m=Math.max(0,1-l1*.5);
   }
   S2.match+=(m-S2.match)*(1-Math.pow(.05,dt));
-  const ok=S2.match>S2_THRESH;
-  S2.hold=ok?S2.hold+dt:Math.max(0,S2.hold-dt*1.5);
-  const prog=Math.min(1,S2.hold/S2_HOLD);
-  // the ghost outline: dim when far from matching, brightening toward white,
-  // pulsing as the hold completes
-  const bright=.18+.55*S2.match+.3*prog*(.6+.4*Math.sin(t*9));
-  S2.ghost.forEach(g=>{
-    g.scale.y+=(g.userData.h-g.scale.y)*(1-Math.pow(.001,dt));
-    g.position.y=g.scale.y/2;
-    g.material.opacity=Math.min(1,bright);
-    g.material.color.setRGB(.55+.45*prog,1,1);
-  });
+  S2.hold=S2.match>S2_THRESH?S2.hold+dt:Math.max(0,S2.hold-dt*1.5);
   if(S2.hold>=S2_HOLD)s2RoundDone();
-  // stuck? one plain-words hint per round
-  if(S2.arrived&&!S2.hinted&&t-S2.roundT>10&&prog<.3){
-    S2.hinted=true;setPrompt(S2_ROUNDS[S2.round].hint);
-  }
+  if(S2.arrived&&!S2.hinted&&t-S2.roundT>10&&S2.hold/S2_HOLD<.3){S2.hinted=true;setPrompt(S2_ROUNDS[S2.round].hint);}
 }
-
-// eyes closed: forces the unwatched world; you hear what you cannot see
 function setEyes(c){
-  S2.eyes=c;veil.style.opacity=c?.87:0;
-  eyeBtn.classList.toggle('held',c);
+  S2.eyes=c;veil.style.opacity=c?.87:0;eyeBtn.classList.toggle('held',c);
   if(c&&S2.active){setPrompt('Listen.');if(!S2.eyeUsed){S2.eyeUsed=true;eyeLabel.style.opacity=0;}}
 }
 eyeBtn.addEventListener('pointerdown',e=>{e.preventDefault();setEyes(true);audio();});
@@ -594,88 +591,79 @@ eyeBtn.addEventListener('pointerup',()=>setEyes(false));
 eyeBtn.addEventListener('pointercancel',()=>setEyes(false));
 eyeBtn.addEventListener('contextmenu',e=>e.preventDefault());
 
-// map logical (unfolded) coordinates to render space under the current fold
-function foldedPoint(src){
-  const p=src.clone();
-  if(p.x>0){const th=fold*1.42,x=p.x;p.x=Math.cos(th)*x;p.y+=Math.sin(th)*x;}
-  return p;
-}
-
-// new text condenses out of blur — the same way the world's dots condense
-function setPrompt(t){if(promptEl.textContent===t)return;
-  promptEl.classList.add('swap');
-  setTimeout(()=>{promptEl.textContent=t;promptEl.classList.remove('swap')},220);}
-const pipsEl=document.getElementById('pips');
-function setPips(n){[...pipsEl.children].forEach((el,i)=>el.classList.toggle('lit',i<n));}
-function pulseFlash(){flashEl.style.opacity=.5;setTimeout(()=>flashEl.style.opacity=0,90)}
-
+// ---------- lights: collect ----------
 function collectSeed(i){
  if(seedData[i].taken)return;
- seedData[i].taken=true; seeds++; countEl.textContent=`LIGHTS ${seeds} / 3`;
- setPips(seeds);
+ seedData[i].taken=true; seeds++; countEl.textContent=`LIGHTS ${seeds} / 3`; setPips(seeds);
  seedMeshes[i].visible=false; pulseFlash(); chime();
  emitRipple(seedData[i].p.x,seedData[i].p.z,1.7);
- awakened=Math.min(1,awakened+.34); planeMat.uniforms.uAwake.value=awakened;
+ awakened=Math.min(1,awakened+.25); planeMat.uniforms.uAwake.value=awakened;
  if(seeds===1){
-   moveStatus.style.opacity=0;
-   foldTarget=.15; // the world twitches: a hint that the seam is now alive
-   setPrompt('The next light is beyond the wall. Grab the glowing seam and pull.');
+   moveStatus.style.opacity=0; foldTarget=.15;
+   setPrompt('The next light is beyond the edge. Grab the glowing edge and pull.');
  }
- if(seeds===2){setPrompt('Distance was only a rule. Follow the last light.');}
- if(seeds===3){
-   beaconArrow.style.opacity=0;
-   setPrompt('You were never moving through space.');
-   setTimeout(()=>setPrompt('You were changing what space meant.'),3200);
-   setTimeout(()=>setPrompt('DIMENSIONAL AWAKENING'),7000);
-   setTimeout(startStage2,9500);
- }
+ if(seeds===2)setPrompt('One more light.');
+ if(seeds===3){setPrompt('The lights go somewhere.');setTimeout(startStage2,1800);}
 }
 
-// ---------- movement ----------
-function updatePlayer(dt){
+// ---------- the crossing: birth of depth ----------
+function birthOfDepth(t){
+  crossed=true; dimT=t;
+  playerPos.x=2.2; playerPos.z*=-.72; velocity.multiplyScalar(.3);
+  pulseFlash(); depthChord();
+  emitRipple(playerPos.x,playerPos.z,1.6);
+  awakened=Math.min(1,awakened+.3); planeMat.uniforms.uAwake.value=awakened;
+  setPrompt('You lifted the paper.');
+  setTimeout(()=>setPrompt('Now you are standing on it.'),2200);
+  setTimeout(()=>setPrompt('Follow the lights.'),5200);
+  setTimeout(()=>{foldTarget=0;},1500);          // the sheet settles flat beneath you
+  dimLabel.textContent='3D'; dimLabel.style.letterSpacing='.6em';
+  setTimeout(()=>dimLabel.style.letterSpacing='.3em',1200);
+}
+
+// ---------- movement (screen-relative: the camera decides what "up" means) ----------
+function updatePlayer(dt,t){
  let dx=(keys['KeyD']||keys['ArrowRight']?1:0)-(keys['KeyA']||keys['ArrowLeft']?1:0)+held.x;
  let dz=(keys['KeyS']||keys['ArrowDown']?1:0)-(keys['KeyW']||keys['ArrowUp']?1:0)+held.z;
  dx=THREE.MathUtils.clamp(dx,-1,1); dz=THREE.MathUtils.clamp(dz,-1,1);
- const dir=new THREE.Vector3(dx,0,dz);if(dir.lengthSq()>0)dir.normalize();
- const speed=(portraitMode()?6.4:4.6)*(1+awakened*.12);
+ const dir=new THREE.Vector3().addScaledVector(rgt,dx).addScaledVector(fwd,-dz);
+ if(dir.lengthSq()>0)dir.normalize();
+ const speed=(portraitMode()?6.2:4.8)*(1+awakened*.12);
  velocity.lerp(dir.multiplyScalar(speed),1-Math.pow(.001,dt));
  const prevX=playerPos.x;
  playerPos.addScaledVector(velocity,dt);
  playerPos.x=THREE.MathUtils.clamp(playerPos.x,-11,11);
  playerPos.z=THREE.MathUtils.clamp(playerPos.z,-8,8);
 
- const crossed=Math.sign(prevX)!==Math.sign(playerPos.x)&&Math.abs(prevX)>1e-4;
- if(crossed||Math.abs(playerPos.x)<.34){
-   if(fold>FOLD_OPEN&&Math.abs(velocity.x)>.2){
-     // the fold joins the two halves: crossing the seam is a jump across space
-     const sign=velocity.x>0?1:-1;
-     emitRipple(playerPos.x,playerPos.z,1.4);
-     playerPos.x=sign>0?7.2:-7.2;
-     playerPos.z*=-.72;
-     emitRipple(playerPos.x,playerPos.z,1.4);
-     velocity.multiplyScalar(.55);
-     crossT=clock.elapsedTime; // the moment space turns around you
-     pulseFlash(); blip(196,.4,.15,'sine'); blip(392,.5,.1,'sine');
-     awakened=Math.min(1,awakened+.1);planeMat.uniforms.uAwake.value=awakened;
-     if(seeds>=1&&!S2.active) setPrompt('Two distant places just touched. Keep going.');
-   }else{
-     // unfolded: the seam is a wall — push back toward the side the player came from
-     const from=prevX<0?-1:1;
-     playerPos.x=from<0?Math.min(playerPos.x,-.45):Math.max(playerPos.x,.45);
-     if(prevX!==playerPos.x&&Math.abs(velocity.x)>1)velocity.x*=-.25;
-     if(seeds>=1&&fold<FOLD_OPEN&&!S2.active)setPrompt('The wall of light will not let you pass. Grab the seam and pull.');
+ if(!crossed){
+   const crossedLine=Math.sign(prevX)!==Math.sign(playerPos.x)&&Math.abs(prevX)>1e-4;
+   if(crossedLine||Math.abs(playerPos.x)<.34){
+     if(fold>FOLD_OPEN&&velocity.x>.2){ birthOfDepth(t); }
+     else{
+       playerPos.x=Math.min(playerPos.x,-.45);
+       if(Math.abs(velocity.x)>1)velocity.x*=-.25;
+       if(seeds>=1&&fold<FOLD_OPEN)setPrompt('The edge will not let you pass. Grab the glowing edge and pull.');
+     }
    }
+ }else{
+   // in 3D the edge behind you is a wall of light; you do not go back
+   if(playerPos.x<1.4){playerPos.x=1.4;velocity.x=Math.abs(velocity.x)*.3;}
  }
- // stage 2 barrier: solid except at the two gaps — your body can plug one
+ // stage 2 wall: solid except at the two openings
  if(S2.active&&(prevX-S2_BARX)*(playerPos.x-S2_BARX)<0){
    const inGap=Math.abs(playerPos.z-S2_GAPZ)<S2_GAPHW||Math.abs(playerPos.z+S2_GAPZ)<S2_GAPHW;
    if(!inGap){playerPos.x=prevX<S2_BARX?S2_BARX-.4:S2_BARX+.4;velocity.x*=-.25;}
  }
+ if(S2.active&&playerPos.x>S2_SCRX-1.2){playerPos.x=S2_SCRX-1.2;velocity.x*=-.25;}
  moveAccum+=velocity.length()*dt;
  if(moveAccum>1.3){emitRipple(playerPos.x,playerPos.z,.55);moveAccum=0;}
- const rp=foldedPoint(playerPos);player.position.copy(rp);player.position.y+=.45;
- player.scale.setScalar(portraitMode()?1.7:1);
- player.rotation.y+=dt*(.7+awakened*1.8);
+
+ const rp=foldedPoint(playerPos);player.position.copy(rp);
+ pDisc.scale.setScalar(Math.max(.001,1-dim)); pRing.scale.setScalar(Math.max(.001,1-dim));
+ p3.scale.setScalar(Math.max(.001,dim)); p3.position.y=.45*dim;
+ pShadow.material.opacity=.3*dim;
+ player.scale.setScalar(THREE.MathUtils.lerp(portraitMode()?1.5:1,1,dim));
+ p3.rotation.y+=dt*(.7+awakened*1.8);
  pHalo.scale.setScalar(1+.08*Math.sin(performance.now()*.004));
 }
 
@@ -684,28 +672,25 @@ function updateSeeds(t){
  if(ct>=0){
    const a=foldedPoint(playerPos); a.y+=.18;
    const b=foldedPoint(seedData[ct].p); b.y+=.18;
-   guideLine.visible=true;
-   guideLine.geometry.setFromPoints([a,b]); guideLine.computeLineDistances();
+   guideLine.visible=true;guideLine.geometry.setFromPoints([a,b]);guideLine.computeLineDistances();
  }else if(S2.active&&S2.done<3&&S2.round===2&&s2BlockedGap()===0){
-   // round three: the light leads you to the nearest opening in the wall
    const gz=playerPos.z>=0?S2_GAPZ:-S2_GAPZ;
    const a=foldedPoint(playerPos); a.y+=.18;
-   const b=new THREE.Vector3(S2_BARX,.18,gz);
-   guideLine.visible=true;
-   guideLine.geometry.setFromPoints([a,b]); guideLine.computeLineDistances();
+   guideLine.visible=true;guideLine.geometry.setFromPoints([a,new THREE.Vector3(S2_BARX,.18,gz)]);guideLine.computeLineDistances();
  }else guideLine.visible=false;
  seedMeshes.forEach((g,i)=>{
    if(seedData[i].taken)return;
-   const rp=foldedPoint(seedData[i].p);g.position.copy(rp);g.position.y+=.5+.12*Math.sin(t*2.1+i);
+   const rp=foldedPoint(seedData[i].p);g.position.copy(rp);g.position.y+=.5*dim+.12*Math.sin(t*2.1+i);
    g.rotation.y=t*(.5+i*.14);g.children[1].rotation.z=t*(.25+i*.11);
+   g.children[0].scale.y=1.65*THREE.MathUtils.lerp(.35,1,dim);
    const active=i===ct;
-   beams[i].visible=active; glows[i].visible=active;
+   beams[i].visible=active&&dim>.2; glows[i].visible=active;
    if(active)beams[i].material.opacity=.13+.10*(.5+.5*Math.sin(t*3.2));
-   if(foldedPoint(playerPos).distanceTo(g.position)<.8)collectSeed(i);
+   if(foldedPoint(playerPos).distanceTo(g.position)<.85)collectSeed(i);
  });
 }
 
-// ---------- d-pad: pointer-based, immediate step + hold to keep moving ----------
+// ---------- d-pad ----------
 function bindPad(id,ax,val){
   const b=document.getElementById(id);
   const press=e=>{
@@ -713,23 +698,16 @@ function bindPad(id,ax,val){
     if(b.setPointerCapture&&e.pointerId!==undefined)try{b.setPointerCapture(e.pointerId)}catch(_){}
     held[ax]=val; b.classList.add('held');
     b.classList.remove('pulse');void b.offsetWidth;b.classList.add('pulse');
-    // the whole pad tips toward the pressed direction
     dpadEl.style.transform=`perspective(320px) rotateX(${ax==='z'?-val*7:0}deg) rotateY(${ax==='x'?val*7:0}deg)`;
-    // velocity impulse so even the shortest tap yields a clearly visible glide,
-    // and all movement passes through the seam barrier/crossing logic
-    if(ax==='x')velocity.x+=val*10; else velocity.z+=val*10;
+    if(ax==='x')velocity.addScaledVector(rgt,val*10); else velocity.addScaledVector(fwd,-val*10);
     emitRipple(playerPos.x,playerPos.z,.9);
     moveCount++;
-    if(moveCount<=6){
-      moveStatus.textContent='MOVEMENT '+moveCount+' ✓';
-      moveStatus.classList.remove('tick');void moveStatus.offsetWidth;moveStatus.classList.add('tick');
-    }
+    if(moveCount<=6){moveStatus.textContent='MOVEMENT '+moveCount+' ✓';
+      moveStatus.classList.remove('tick');void moveStatus.offsetWidth;moveStatus.classList.add('tick');}
     else moveStatus.style.opacity=0;
-    blip(340+moveCount*22,.06,.07);
-    audio();
+    blip(340+moveCount*22,.06,.07); audio();
   };
-  const release=()=>{held[ax]=0;b.classList.remove('held');
-    if(!held.x&&!held.z)dpadEl.style.transform='';};
+  const release=()=>{held[ax]=0;b.classList.remove('held');if(!held.x&&!held.z)dpadEl.style.transform='';};
   b.addEventListener('pointerdown',press);
   b.addEventListener('pointerup',release);
   b.addEventListener('pointercancel',release);
@@ -737,108 +715,105 @@ function bindPad(id,ax,val){
   b.addEventListener('contextmenu',e=>e.preventDefault());
 }
 bindPad('up','z',-1);bindPad('down','z',1);bindPad('left','x',-1);bindPad('right','x',1);
-
 addEventListener('keydown',e=>{keys[e.code]=true;audio();
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();});
 addEventListener('keyup',e=>keys[e.code]=false);
 
-// ---------- fold drag: only when the pointer actually grabs the seam ----------
+// ---------- fold drag: grab the edge ----------
 const raycaster=new THREE.Raycaster(), ndc=new THREE.Vector2();
 renderer.domElement.addEventListener('pointerdown',e=>{
-  if(seeds<1)return; // folding unlocks after the first seed
+  if(seeds<1||crossed)return;
   ndc.set((e.clientX/innerWidth)*2-1,-(e.clientY/innerHeight)*2+1);
   raycaster.setFromCamera(ndc,camera);
   if(raycaster.intersectObject(seamGrab).length>0){
     dragging=true;dragStartX=e.clientX;dragStartFold=foldTarget;
-    renderer.domElement.setPointerCapture(e.pointerId);
-    audio();
+    renderer.domElement.setPointerCapture(e.pointerId);audio();
   }
 });
 renderer.domElement.addEventListener('pointermove',e=>{
   if(!dragging)return;
   const delta=(dragStartX-e.clientX)/Math.max(innerWidth*.38,260);
   foldTarget=THREE.MathUtils.clamp(dragStartFold+delta,0,1);
-  if(S2.active)return;
-  if(foldTarget>.35&&seeds>=1&&fold<FOLD_OPEN)setPrompt('Keep folding. Make two places become one.');
-  if(foldTarget>FOLD_OPEN&&seeds>=1)setPrompt('The halves are touching. Walk into the seam.');
+  if(foldTarget>.35&&fold<FOLD_OPEN)setPrompt('Keep pulling. Bring the far side to you.');
+  if(foldTarget>FOLD_OPEN)setPrompt('The far side is touching the edge. Walk into it.');
 });
 const endDrag=e=>{if(dragging){dragging=false;try{renderer.domElement.releasePointerCapture(e.pointerId)}catch(_){}}};
 renderer.domElement.addEventListener('pointerup',endDrag);
 renderer.domElement.addEventListener('pointercancel',endDrag);
 
+// ---------- the camera: straight down in 2D, behind you in 3D ----------
+const camUp=new THREE.Vector3(), camDir=new THREE.Vector3(), camTarget=new THREE.Vector3();
+const DIR_UP=new THREE.Vector3(0,1,0);
+function updateCamera(t){
+  const e=dim, por=portraitMode();
+  // screen-relative axes rotate 90 degrees across the shift: up = -z in 2D, +x in 3D
+  const yaw=e*Math.PI/2;
+  fwd.set(Math.sin(yaw),0,-Math.cos(yaw)); rgt.set(Math.cos(yaw),0,Math.sin(yaw));
+  const fov=THREE.MathUtils.lerp(4,por?70:60,e);
+  const H=THREE.MathUtils.lerp(por?20:17,por?13:11,e);
+  const dist=H/(2*Math.tan(THREE.MathUtils.degToRad(fov)/2));
+  // what to look at
+  const pr=foldedPoint(playerPos);
+  if(!crossed&&seeds===0){camTarget.copy(playerPos).lerp(seedData[0].p,.5);camTarget.y=0;}
+  else{camTarget.copy(pr);camTarget.y=0;}
+  if(e>0){camTarget.addScaledVector(fwd,(S2.active?4.2:1.6)*e);camTarget.y+=(S2.active?1.1:.3)*e;}
+  const wob=awakened*.22*e;
+  camTarget.x+=Math.sin(t*.27)*wob;camTarget.z+=Math.cos(t*.21)*wob;
+  // where to stand: straight above (2D) sliding down to behind-and-above (3D)
+  const dir3=new THREE.Vector3().addScaledVector(fwd,-1).addScaledVector(DIR_UP,S2.active?(por?.62:.5):(por?.78:.6)).normalize();
+  camDir.copy(DIR_UP).lerp(dir3,e).normalize();
+  camera.position.copy(camTarget).addScaledVector(camDir,dist);
+  camUp.set(0,0,-1).lerp(DIR_UP,e).normalize();
+  camera.up.copy(camUp);
+  camera.fov=fov;camera.updateProjectionMatrix();
+  camera.lookAt(camTarget);
+  scene.fog.density=.03*e;
+}
+
 // ---------- main loop ----------
 function animate(){
  requestAnimationFrame(animate);
  const dt=Math.min(clock.getDelta(),.033),t=clock.elapsedTime;
+ dim=crossed?ease((t-dimT)/2.0):0;
  fold+=(foldTarget-fold)*(1-Math.pow(.0001,dt));
- planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;
+ planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;planeMat.uniforms.uDim.value=dim;
  seamMat.opacity=.62+.3*Math.sin(t*3.1);
- seamHalo.material.opacity=.05+.05*Math.sin(t*2.2);
- seamWall.material.opacity=Math.max(0,.16*(1-fold/FOLD_OPEN))+.02;
+ seamHalo.material.opacity=.09+.06*Math.sin(t*2.2);
+ seamWall.material.opacity=.16*dim;
  if(foldGain)foldGain.gain.value=fold*.06;
  if(foldOsc)foldOsc.frequency.value=52+fold*40;
- updatePlayer(dt);updateSeeds(t);updateLandmarks();updateStage2(dt,t);
- renderer.toneMappingExposure=1.15+awakened*.35;
+ updateCamera(t);
+ updatePlayer(dt,t);updateSeeds(t);updateLandmarks();updateStage2(dt,t);
+ renderer.toneMappingExposure=1.15+awakened*.3;
  scene.userData.stars.material.opacity=.42+.3*awakened;
-
+ scene.userData.stars.rotation.y=t*.005*(1+awakened*3);
+ scene.userData.stars.rotation.x=Math.sin(t*.05)*.3*awakened;
+ world.scale.setScalar(1+.02*Math.sin(t*.7)*awakened);
+ // beacon arrow toward the current light (or the apparatus)
  const ct=currentTarget();
  let arrowTo=null;
  if(ct>=0)arrowTo=foldedPoint(seedData[ct].p);
- else if(S2.active&&!S2.arrived){
-   if(Math.hypot(playerPos.x-S2_BARX,playerPos.z)<5.5){S2.arrived=true;beaconArrow.style.opacity=0;}
-   else{arrowTo=S2.center.clone();beaconArrow.style.opacity=1;}
- }
+ else if(S2.active&&!S2.arrived)arrowTo=S2.center.clone();
  if(arrowTo){
+   beaconArrow.style.opacity=1;
    const bp=arrowTo;bp.y+=1.0;bp.project(camera);
    const sx=(bp.x*.5+.5)*innerWidth, sy=(-bp.y*.5+.5)*innerHeight;
    const ang=Math.atan2(sy-innerHeight*.42,sx-innerWidth*.5)*180/Math.PI+90;
    beaconArrow.style.left=Math.max(42,Math.min(innerWidth-42,sx))+'px';
    beaconArrow.style.top=Math.max(105,Math.min(innerHeight-200,sy))+'px';
    beaconArrow.style.transform='translate(-50%,-50%) rotate('+ang+'deg)';
- }
- scene.userData.stars.rotation.y=t*.005*(1+awakened*3);
- // full awakening: the world breathes and the stars begin to spiral
- world.scale.setScalar(1+.025*Math.sin(t*.7)*awakened);
- scene.userData.stars.rotation.x=Math.sin(t*.05)*.3*awakened;
-
- const wob=awakened*.25;
- const target=foldedPoint(playerPos);target.y=0;
- if(S2.active&&S2.done<3)target.lerp(S2.center,portraitMode()?.55:.45); // keep the apparatus in frame
- if(portraitMode()){
-   // Onboarding: fixed frame containing both player and first beacon so
-   // movement is visually undeniable. Afterwards: follow the player.
-   let focus;
-   if(seeds===0){focus=playerPos.clone().lerp(seedData[0].p,.5);focus=foldedPoint(focus);}
-   else focus=target.clone();
-   camera.fov=72;camera.updateProjectionMatrix();
-   camera.position.set(focus.x+Math.sin(t*.27)*wob,14.5+Math.sin(t*.31)*wob,focus.z+8.2+Math.cos(t*.21)*wob);
-   camera.lookAt(focus.x,0,focus.z-.7);
- }else{
-   camera.fov=58+awakened*8;camera.updateProjectionMatrix();
-   camera.position.x=target.x*.15+Math.sin(t*.27)*wob;
-   camera.position.z=14+target.z*.12+Math.cos(t*.21)*wob;
-   camera.position.y=11+Math.sin(t*.31)*wob;
-   camera.lookAt(target.x*.25,0,target.z*.2);
- }
- // crossing the fold: space turns around you for ~a second — a camera roll
- // and FOV punch that follow the fold's own rotation, not a cut
- const ck=(t-crossT)/.95;
- if(ck>=0&&ck<1){
-   const e=Math.sin(ck*Math.PI);
-   camera.rotateZ(e*.85);
-   camera.fov+=e*24;camera.updateProjectionMatrix();
- }
+ }else beaconArrow.style.opacity=0;
  renderer.render(scene,camera);
 }
 animate();
-
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
 
-// read-only state hook for automated smoke tests (see docs/HANDOFF.md §18 on
-// why testability matters more than usual for this project)
+// read-only state hook for automated smoke tests
 window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get seeds(){return seeds},get moves(){return moveCount},
-  get s2(){return {active:S2.active,done:S2.done,round:S2.round,match:+S2.match.toFixed(2),hold:+S2.hold.toFixed(1),eyes:S2.eyes}},
-  s2start:startStage2,s2round:s2SetRound};
+  get dim(){return dim},get crossed(){return crossed},
+  get s2(){let tot=0;for(const b of S2.bins)tot+=b.n;return {active:S2.active,done:S2.done,round:S2.round,match:+S2.match.toFixed(2),hold:+S2.hold.toFixed(1),eyes:S2.eyes,blk:s2BlockedGap(),near:s2NearSlits(),total:+tot.toFixed(1),peak:S2.bins.length?S2.bins.reduce((a,b)=>b.n>a.n?b:a).z.toFixed(2):null}},
+  s2start:startStage2,s2round:s2SetRound,
+  jump3d(){if(!crossed){crossed=true;dimT=-99;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';}}};
 </script>
 </body>
 </html>
