@@ -14,36 +14,77 @@
     overscroll-behavior:none;touch-action:none}
   canvas{display:block;touch-action:none}
   #ui{position:fixed;inset:0;pointer-events:none}
-  #title{position:absolute;top:max(16px,env(safe-area-inset-top));left:20px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;opacity:.6}
+  #title{position:absolute;top:max(16px,env(safe-area-inset-top));left:20px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;opacity:.6;animation:titleIn 1.6s cubic-bezier(.2,.7,.3,1)}
+  @keyframes titleIn{from{opacity:0;letter-spacing:.6em;filter:blur(4px)}to{opacity:.6;letter-spacing:.22em;filter:blur(0)}}
   #count{position:absolute;top:max(16px,env(safe-area-inset-top));right:20px;font-size:12px;opacity:.68;letter-spacing:.12em}
+  #pips{position:absolute;top:calc(max(16px,env(safe-area-inset-top)) + 22px);right:22px;display:flex;gap:8px}
+  #pips i{width:7px;height:7px;transform:rotate(45deg);border:1px solid rgba(140,250,255,.5);transition:background .3s,box-shadow .3s,border-color .3s}
+  #pips i.lit{background:#aefcff;border-color:#aefcff;box-shadow:0 0 12px #65f7ff;animation:pipPop .5s cubic-bezier(.22,2.4,.5,1)}
+  @keyframes pipPop{0%{transform:rotate(45deg) scale(.3)}55%{transform:rotate(45deg) scale(1.8)}100%{transform:rotate(45deg) scale(1)}}
   #prompt{position:absolute;left:50%;bottom:calc(max(16px,env(safe-area-inset-bottom)) + 170px);transform:translateX(-50%);
     padding:10px 16px;border:1px solid rgba(180,245,255,.18);border-radius:999px;background:rgba(1,5,14,.5);
-    backdrop-filter:blur(10px);font-size:14px;max-width:78vw;text-align:center;transition:opacity .35s;
+    backdrop-filter:blur(10px);font-size:14px;max-width:78vw;text-align:center;
+    transition:opacity .3s,filter .45s,letter-spacing .45s;
     box-shadow:0 0 28px rgba(0,230,255,.06)}
+  #prompt.swap{opacity:.06;filter:blur(7px);letter-spacing:.14em}
   #moveStatus{position:absolute;left:50%;top:calc(max(16px,env(safe-area-inset-top)) + 34px);transform:translateX(-50%);
     font:700 12px ui-monospace,monospace;color:#dfffff;opacity:.75;letter-spacing:.1em;transition:opacity .6s}
-  #beaconArrow{position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);font-size:34px;color:#bffcff;
-    text-shadow:0 0 18px #65f7ff;transition:opacity .4s}
+  #moveStatus.tick{animation:statusTick .28s cubic-bezier(.22,2,.5,1)}
+  @keyframes statusTick{0%{transform:translateX(-50%) scale(1.3)}100%{transform:translateX(-50%) scale(1)}}
+  #beaconArrow{position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);font-size:34px;color:#bffcff;transition:opacity .4s}
+  #beaconArrow span{display:inline-block;text-shadow:0 0 18px #65f7ff;animation:arrowBreathe 1.5s ease-in-out infinite}
+  @keyframes arrowBreathe{0%,100%{transform:scale(1);text-shadow:0 0 14px #65f7ff}50%{transform:scale(1.22);text-shadow:0 0 26px #8ffcff}}
   #flash{position:absolute;inset:0;background:white;opacity:0;transition:opacity .18s;mix-blend-mode:difference}
   #dpad{position:absolute;left:max(14px,env(safe-area-inset-left));bottom:max(14px,env(safe-area-inset-bottom));
-    width:150px;height:150px;pointer-events:auto;filter:drop-shadow(0 0 18px rgba(80,245,255,.16));transition:opacity .5s}
+    width:150px;height:150px;pointer-events:auto;filter:drop-shadow(0 0 18px rgba(80,245,255,.16));
+    transition:opacity .5s,transform .22s cubic-bezier(.2,.9,.3,1.3)}
   .dkey{position:absolute;-webkit-appearance:none;appearance:none;width:48px;height:48px;
     border:1px solid rgba(130,245,255,.32);background:rgba(3,18,30,.72);color:#dfffff;border-radius:12px;
     font:700 20px/1 system-ui;display:grid;place-items:center;touch-action:none;cursor:pointer;
-    box-shadow:inset 0 0 18px rgba(0,230,255,.05)}
-  .dkey.held{background:rgba(45,220,255,.3);border-color:rgba(160,255,255,.85);box-shadow:0 0 20px rgba(80,245,255,.3)}
+    box-shadow:inset 0 0 18px rgba(0,230,255,.05);
+    transition:transform .18s cubic-bezier(.22,2.2,.5,1),background .12s,border-color .12s,box-shadow .12s}
+  .dkey span{display:block;transition:transform .14s cubic-bezier(.22,2.2,.5,1)}
+  /* each key carries a luminous hairline on its outward edge — it points */
+  .dkey::before{content:"";position:absolute;opacity:.3;transition:opacity .15s;border-radius:2px;
+    background:linear-gradient(90deg,transparent,rgba(120,245,255,.9),transparent)}
+  #up::before{top:3px;left:10px;right:10px;height:2px}
+  #down::before{bottom:3px;left:10px;right:10px;height:2px}
+  #left::before,#right::before{background:linear-gradient(180deg,transparent,rgba(120,245,255,.9),transparent)}
+  #left::before{left:3px;top:10px;bottom:10px;width:2px}
+  #right::before{right:3px;top:10px;bottom:10px;width:2px}
+  /* a press ripples outward — the same language as the world */
+  .dkey::after{content:"";position:absolute;inset:0;border-radius:inherit;border:1px solid rgba(150,250,255,.9);opacity:0;pointer-events:none}
+  .dkey.pulse::after{animation:keyRipple .5s ease-out}
+  @keyframes keyRipple{0%{opacity:.85;transform:scale(1)}100%{opacity:0;transform:scale(2)}}
+  .dkey.held{background:rgba(45,220,255,.3);border-color:rgba(160,255,255,.85);box-shadow:0 0 20px rgba(80,245,255,.3);transform:scale(.9)}
+  .dkey.held::before{opacity:1}
+  #up.held span{transform:translateY(-3px)}#down.held span{transform:translateY(3px)}
+  #left.held span{transform:translateX(-3px)}#right.held span{transform:translateX(3px)}
+  .dkey:focus-visible{outline:1px solid rgba(170,255,255,.9);outline-offset:3px}
   #up{left:51px;top:0}#left{left:0;top:51px}#down{left:51px;top:102px}#right{left:102px;top:51px}
   #foldHint{position:absolute;right:20px;bottom:max(18px,env(safe-area-inset-bottom));font-size:11px;opacity:.45;text-align:right;line-height:1.6;letter-spacing:.06em}
   #veil{position:absolute;inset:0;background:#010208;opacity:0;transition:opacity .35s;pointer-events:none}
   #eye{position:absolute;right:max(16px,env(safe-area-inset-right));bottom:calc(max(14px,env(safe-area-inset-bottom)) + 64px);
     width:58px;height:58px;border-radius:50%;display:none;place-items:center;pointer-events:auto;cursor:pointer;
     -webkit-appearance:none;appearance:none;border:1px solid rgba(130,245,255,.32);background:rgba(3,18,30,.72);
-    color:#dfffff;font:20px/1 system-ui;touch-action:none;box-shadow:inset 0 0 18px rgba(0,230,255,.05)}
-  #eye.held{background:rgba(45,220,255,.3);border-color:rgba(160,255,255,.85)}
+    color:#dfffff;touch-action:none;box-shadow:inset 0 0 18px rgba(0,230,255,.05);
+    animation:eyeBreathe 3.2s ease-in-out infinite;transition:background .15s,border-color .15s}
+  @keyframes eyeBreathe{0%,100%{box-shadow:inset 0 0 18px rgba(0,230,255,.05),0 0 10px rgba(80,245,255,.1)}50%{box-shadow:inset 0 0 18px rgba(0,230,255,.1),0 0 22px rgba(80,245,255,.3)}}
+  #eye svg{overflow:visible;transition:transform .16s ease-in}
+  #eye .pupil{transform-origin:13px 9px;transition:transform .16s}
+  #eye.held{background:rgba(45,220,255,.3);border-color:rgba(160,255,255,.85);animation:none}
+  #eye.held svg{transform:scaleY(.12)}   /* the eye closes */
+  #eye.held .pupil{transform:scale(.2)}
+  #eye:focus-visible{outline:1px solid rgba(170,255,255,.9);outline-offset:3px}
   @media (max-width:700px){
     #foldHint{display:none}
     #prompt{font-size:12px;bottom:calc(max(14px,env(safe-area-inset-bottom)) + 162px)}
     #title{font-size:9px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    #title,#beaconArrow span,#eye,#pips i.lit{animation:none}
+    .dkey,.dkey span,#dpad,#prompt{transition-duration:.01s}
+    .dkey.pulse::after{animation:none}
   }
 </style>
 </head>
@@ -51,19 +92,25 @@
 <div id="ui">
   <div id="title">Dimensional Awakening / Fold Study V6</div>
   <div id="count">LIGHTS 0 / 3</div>
+  <div id="pips"><i></i><i></i><i></i></div>
   <div id="moveStatus">TAP AN ARROW TO MOVE</div>
-  <div id="beaconArrow">&#8595;</div>
+  <div id="beaconArrow"><span>&#8595;</span></div>
   <div id="prompt">Move toward the beacon.</div>
   <div id="foldHint">MOVE &middot; WASD / ARROWS / PAD<br>FOLD SPACE &middot; GRAB THE CYAN SEAM</div>
   <div id="dpad">
-    <button class="dkey" id="up">&#8593;</button>
-    <button class="dkey" id="left">&#8592;</button>
-    <button class="dkey" id="down">&#8595;</button>
-    <button class="dkey" id="right">&#8594;</button>
+    <button class="dkey" id="up" aria-label="Move up"><span>&#8593;</span></button>
+    <button class="dkey" id="left" aria-label="Move left"><span>&#8592;</span></button>
+    <button class="dkey" id="down" aria-label="Move down"><span>&#8595;</span></button>
+    <button class="dkey" id="right" aria-label="Move right"><span>&#8594;</span></button>
   </div>
   <div id="flash"></div>
   <div id="veil"></div>
-  <button id="eye" type="button">&#128065;</button>
+  <button id="eye" type="button" aria-label="Hold to close your eyes">
+    <svg width="28" height="19" viewBox="0 0 26 18" fill="none" aria-hidden="true">
+      <path d="M1 9 Q13 -3.5 25 9 Q13 21.5 1 9 Z" stroke="#dfffff" stroke-width="1.4"/>
+      <circle class="pupil" cx="13" cy="9" r="3.4" fill="#aefcff"/>
+    </svg>
+  </button>
 </div>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.min.js"}}
@@ -361,7 +408,7 @@ function startStage2(){
   if(S2.active)return;
   buildStage2();
   S2.active=true;S2.startT=clock.elapsedTime;s2Group.visible=true;
-  countEl.textContent='PATTERNS 0 / 3';
+  countEl.textContent='PATTERNS 0 / 3';setPips(0);
   eyeBtn.style.display='grid';
   setPrompt('Something is pouring new lights into the world. Go close.');
   emitRipple(S2_EMIT.x,S2_EMIT.z,1.6);
@@ -377,6 +424,7 @@ function s2Hit(z){
     p.got++;
     if(p.got>=p.need){
       p.doneFlag=true;S2.done++;countEl.textContent=`PATTERNS ${S2.done} / 3`;
+      setPips(S2.done);
       pulseFlash();chime();emitRipple(S2_DETX,p.z,1.5);
       if(S2.done===3){
         setPrompt('They knew when you were watching.');
@@ -475,13 +523,18 @@ function foldedPoint(src){
   return p;
 }
 
-function setPrompt(t){if(promptEl.textContent!==t){promptEl.style.opacity=.15;
-  setTimeout(()=>{promptEl.textContent=t;promptEl.style.opacity=1},180)}}
+// new text condenses out of blur — the same way the world's dots condense
+function setPrompt(t){if(promptEl.textContent===t)return;
+  promptEl.classList.add('swap');
+  setTimeout(()=>{promptEl.textContent=t;promptEl.classList.remove('swap')},220);}
+const pipsEl=document.getElementById('pips');
+function setPips(n){[...pipsEl.children].forEach((el,i)=>el.classList.toggle('lit',i<n));}
 function pulseFlash(){flashEl.style.opacity=.5;setTimeout(()=>flashEl.style.opacity=0,90)}
 
 function collectSeed(i){
  if(seedData[i].taken)return;
  seedData[i].taken=true; seeds++; countEl.textContent=`LIGHTS ${seeds} / 3`;
+ setPips(seeds);
  seedMeshes[i].visible=false; pulseFlash(); chime();
  emitRipple(seedData[i].p.x,seedData[i].p.z,1.7);
  awakened=Math.min(1,awakened+.34); planeMat.uniforms.uAwake.value=awakened;
@@ -574,17 +627,24 @@ function bindPad(id,ax,val){
     e.preventDefault();
     if(b.setPointerCapture&&e.pointerId!==undefined)try{b.setPointerCapture(e.pointerId)}catch(_){}
     held[ax]=val; b.classList.add('held');
+    b.classList.remove('pulse');void b.offsetWidth;b.classList.add('pulse');
+    // the whole pad tips toward the pressed direction
+    dpadEl.style.transform=`perspective(320px) rotateX(${ax==='z'?-val*7:0}deg) rotateY(${ax==='x'?val*7:0}deg)`;
     // velocity impulse so even the shortest tap yields a clearly visible glide,
     // and all movement passes through the seam barrier/crossing logic
     if(ax==='x')velocity.x+=val*10; else velocity.z+=val*10;
     emitRipple(playerPos.x,playerPos.z,.9);
     moveCount++;
-    if(moveCount<=6){moveStatus.textContent='MOVEMENT '+moveCount+' ✓';}
+    if(moveCount<=6){
+      moveStatus.textContent='MOVEMENT '+moveCount+' ✓';
+      moveStatus.classList.remove('tick');void moveStatus.offsetWidth;moveStatus.classList.add('tick');
+    }
     else moveStatus.style.opacity=0;
     blip(340+moveCount*22,.06,.07);
     audio();
   };
-  const release=()=>{held[ax]=0;b.classList.remove('held');};
+  const release=()=>{held[ax]=0;b.classList.remove('held');
+    if(!held.x&&!held.z)dpadEl.style.transform='';};
   b.addEventListener('pointerdown',press);
   b.addEventListener('pointerup',release);
   b.addEventListener('pointercancel',release);
