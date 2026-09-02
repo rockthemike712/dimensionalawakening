@@ -85,7 +85,7 @@
     background:rgba(1,5,14,.6);color:#eafcff;font:14px Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:.04em;cursor:pointer;
     box-shadow:0 0 28px rgba(0,230,255,.08);position:relative;overflow:visible;
     animation:pillIn .7s cubic-bezier(.2,.7,.3,1) both;transition:transform .18s cubic-bezier(.22,2.2,.5,1),background .12s,border-color .12s}
-  .pill+.pill{animation-delay:.12s;opacity:.7}
+  .pill+.pill{animation-delay:.12s}
   .pill::after{content:"";position:absolute;inset:0;border-radius:inherit;border:1px solid rgba(150,250,255,.9);opacity:0;pointer-events:none}
   .pill:active{transform:scale(.94);background:rgba(45,220,255,.22);border-color:rgba(160,255,255,.85)}
   .pill:active::after{animation:keyRipple .5s ease-out}
@@ -138,7 +138,7 @@
   </button>
   <div id="eyeLabel">hold &middot; close eyes</div>
   <div id="resume">
-    <div class="rt">You were standing on the paper</div>
+    <div class="rt">THE FIELD</div>
     <button class="pill" id="resumeYes" type="button">Continue</button>
     <button class="pill" id="resumeNo" type="button">Start over</button>
   </div>
