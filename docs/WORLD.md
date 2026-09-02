@@ -59,7 +59,7 @@ Everything is optional except `id`, `name`, `bounds`, `entrance`.
 | id | bounds | direction from the room |
 |---|---|---|
 | room | x 1.4..11.8, z -8..8 | — |
-| thin | x 4..26, z -27..-11 | north (`-z`, "left" on the pad) |
+| thin | x 4..31, z -27..-11 | north (`-z`, "left" on the pad) |
 | corner | x 15..39, z -9..9 | east (`+x`, "up" on the pad) |
 | lamp | x 4..26, z 11..27 | south (`+z`, "right" on the pad) |
 | beads | the 2D page, `x<0` | (a 2D-side toy; see its brief) |
