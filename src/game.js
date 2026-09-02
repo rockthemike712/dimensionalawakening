@@ -49,6 +49,11 @@ export function setFoldTarget(v){foldTarget=THREE.MathUtils.clamp(v,0,1);}
 export let flat=0;
 export function setFlat(v){flat=THREE.MathUtils.clamp(v,0,1.4);}
 export const shape=()=>dim*(1-Math.min(1,flat));
+// look back over the shoulder for a moment: the camera yaws 180 degrees and returns;
+// the pad is ignored meanwhile so screen-relative input cannot flip under the thumb
+let lookT=-99, lookDur=0;
+export function lookBack(seconds=1.4){lookT=clock.elapsedTime;lookDur=seconds;}
+export function looking(){const k=(clock.elapsedTime-lookT)/lookDur;return k>=0&&k<1?Math.min(1,Math.min(k,1-k)*lookDur/.45):0;}
 export function addAwake(k){awakened=Math.min(1,awakened+k);planeMat.uniforms.uAwake.value=awakened;}
 
 // ---------- regions: the universe is a set of places that register themselves ----------
@@ -838,6 +843,7 @@ function guideTo(a,b){
 function updatePlayer(dt,t){
  let dx=(keys['KeyD']||keys['ArrowRight']?1:0)-(keys['KeyA']||keys['ArrowLeft']?1:0)+held.x;
  let dz=(keys['KeyS']||keys['ArrowDown']?1:0)-(keys['KeyW']||keys['ArrowUp']?1:0)+held.z;
+ if(looking()>0){dx=0;dz=0;}
  dx=THREE.MathUtils.clamp(dx,-1,1); dz=THREE.MathUtils.clamp(dz,-1,1);
  const dir=_pdir.set(0,0,0).addScaledVector(rgt,dx).addScaledVector(fwd,-dz);
  if(dir.lengthSq()>0)dir.normalize();
@@ -995,7 +1001,7 @@ const DIR_UP=new THREE.Vector3(0,1,0);
 function updateCamera(t){
   const e=dim, sh=shape(), por=portraitMode();
   // screen-relative axes rotate 90 degrees across the shift: up = -z in 2D, +x in 3D
-  const yaw=e*Math.PI/2;
+  const yaw=e*Math.PI/2+Math.PI*looking();
   fwd.set(Math.sin(yaw),0,-Math.cos(yaw)); rgt.set(Math.cos(yaw),0,Math.sin(yaw));
   const fov=THREE.MathUtils.lerp(4,por?70:60,sh);
   const H=THREE.MathUtils.lerp(por?20:17,por?13:11,sh);
@@ -1063,7 +1069,7 @@ function animate(){
  else if(S2.active&&S2.riseT===undefined&&!S2.arrived)arrowTo=S2.center.clone();
  else if(S2.active&&S2.done<S2_NR&&S2.round===3&&roomFold<.5&&curRegion&&curRegion.id==='room')arrowTo=new THREE.Vector3(S2_SEAM2X,1.6,playerPos.z*.4);
  else if(digested()&&!(S2.active&&inRoom()&&S2.done<S2_NR)){
-   const next=nextRegion(); if(next&&next!==curRegion&&next.entrance)arrowTo=next.entrance.clone();
+   const next=nextRegion(); if(next&&next!==curRegion)arrowTo=next.entrance?next.entrance.clone():S2.center.clone();
  }
  if(arrowTo){
    beaconArrow.style.opacity=1;
@@ -1077,8 +1083,9 @@ function animate(){
  fitViewport();
  renderer.render(scene,camera);
 }
-function nextRegion(){        // the next rung of the act, in order; never the nearest
+function nextRegion(){        // the next rung of the act, in order; never the nearest; then the room
   for(const id of ACT1){const r=byId(id); if(r&&r.built&&!(r.done&&r.done()))return r;}
+  const room=byId('room'); if(room&&room.built&&S2.active&&S2.done<S2_NR)return room;
   return null;
 }
 
