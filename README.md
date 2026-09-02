@@ -54,7 +54,7 @@ Two dimensions, one crossing:
    two piles (stand close, watch) → stripes (step away, or hold the eye to
    close yours and *hear* them land) → one pile (stand in an opening and block
    it). Then a second edge: pull it and the screen folds closer, squeezing the
-   picture — two more patterns need it. The mathematics is never named.
+   picture — one more pattern needs it. The mathematics is never named.
 
 A single variable, `dim` (0 → 1), drives the whole shift: camera height and
 field of view, the player's disc-to-sphere crossfade, pillar extrusion, fog,
@@ -97,7 +97,8 @@ intuitive on both sides of the crossing).
 - [x] **A second edge that composes with the first.** After the third pattern a
       new edge appears across the room; pull it and the far end (screen
       included) folds up toward you. The screen is closer, so the picture
-      squeezes: two more patterns (narrow stripes, close piles) can only be
-      painted with the edge pulled. Fold space to change what the lights do
+      squeezes: one more pattern (narrow stripes) can only be painted with the
+      edge pulled; a tap on the edge toggles it. Fold space to change what the
+      lights do
 - [ ] Then — and only then — TypeScript/Vite project structure, more
       dimensions, shaders, procedural worlds
