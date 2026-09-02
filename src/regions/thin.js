@@ -13,10 +13,32 @@ import {
 // not along -z, which would only ever be seen in strafe. From the entrance
 // the player takes a short walk north (-z) to the first column, which also
 // doubles as the turn: from there the corridor runs east at a fixed z.
+//
+// Second-review layout (critic: REVISE). The whole corridor used to fit
+// inside one held ArrowUp — HOLD_TIME (0.8s) carried ~5 units of flatness
+// at walking speed, and every obstacle was within 2 units of the next, so
+// the carry never lapsed. The fix is spacing, not the trigger radius:
+// HOLD_TIME is now short (~0.25s, ~1.5 units of carry) and the two "slot"
+// columns (A, B) sit far enough apart (>=6 units edge to edge) that a
+// straight run genuinely loses its flatness between them — twice, so the
+// player feels the pop-and-squash rhythm at least twice on the way through,
+// not once at the door and once at the exit. Each slot's wall sits close
+// behind its own column (0.4-0.8 past the edge) so the two are one gesture:
+// squash, then immediately the wall opens under you.
+//
+// The gap is the odd one out on purpose. Column C (the one that flattens
+// you for the gap) sits *off* the corridor's z-line entirely — its circle
+// doesn't reach z=CZ at all — so a straight run through A/B never enters
+// it, and the gap sits far enough past column B that the carry from B has
+// long since drained. The first time anyone reaches the gap, they are at
+// full size: they fall in, get put back on the near lip, and only then
+// discover column C standing just off to the side, close enough to the lip
+// that squashing there and stepping across actually crosses it flat.
 // =====================================================================
 
-const BOUNDS = { x0: 4, x1: 26, z0: -27, z1: -11 };
-const CZ = -16;                        // the corridor's z once it turns east — every obstacle sits on this line
+const BOUNDS = { x0: 4, x1: 31, z0: -27, z1: -11 };
+const CZ = -16;                        // the corridor's z once it turns east — every "slot" obstacle sits on this line
+
 const PALE = 0xcdf6ff;                 // the column's colour; goal light shares it
 const PALE_COL = new THREE.Color(PALE);
 const FALL_COL = new THREE.Color(0xff6a5a);
@@ -24,41 +46,53 @@ const FALL_COL = new THREE.Color(0xff6a5a);
 // squash-and-pop spring: underdamped so it overshoots on the way up (~25%,
 // peaks ~1.25) and undershoots on the way down (briefly negative) before
 // settling in ~0.3s. Tune OMEGA for speed, ZETA for how much it overshoots.
+// Left untouched by this revision — the fix is layout, not the spring.
 const OMEGA = 30, ZETA = 0.4;
-// once the player leaves every column's reach, flatness is held for this
-// long before the spring is allowed to release back toward 0 — so a wall
-// placed just past a column's glow is still crossable flat, but a wall
-// placed well beyond any column is not: the player must carry the flatness
-// out of the light, not just have stood near a column once.
-const HOLD_TIME = 0.8;
+
+// Once the player leaves every column's reach, flatness is held for this
+// long before the spring is allowed to release back toward 0. At walking
+// speed (~6.2 u/s) this carries roughly 1.5 units past a column's edge —
+// short enough that the ~6-unit gaps between columns below genuinely drain
+// it, long enough that a wall sitting right behind its own column is still
+// crossable on the same breath.
+const HOLD_TIME = 0.25;
 
 // Each column: standing within `r` of (x,z) sets the flatten target to 1.
 // `r` is the drawn ring (`vr`) exactly — no blanket reach past the glow.
 // Reach beyond the column comes only from HOLD_TIME above, not from the
 // trigger radius, so a wall/gap must sit close enough that the player can
-// carry the flatness there on foot.
+// carry the flatness there on foot. Radii are untouched by this revision
+// ("fix the layout, not the radius") — only positions moved.
 const COLS = [
-  { x: 9, z: CZ, r: 1.5, vr: 1.5, mesh: null },   // the toy: a few steps north of the entrance; also the turn
-  { x: 14, z: CZ, r: 1.5, vr: 1.5, mesh: null },  // reaches wall B
-  { x: 19, z: CZ, r: 1.5, vr: 1.5, mesh: null },  // reaches the gap
+  { x: 9, z: CZ, r: 1.5, vr: 1.5, mesh: null },      // A: the toy; also the turn. Edge at x=10.5.
+  { x: 18.3, z: CZ, r: 1.5, vr: 1.5, mesh: null },   // B: 6.3 units past A's edge (near edge 16.8) — the carry drains crossing this stretch.
+  { x: 22, z: CZ - 2.6, r: 1.5, vr: 1.5, mesh: null }, // C: the gap's column. Off the corridor line — its edge (z=-17.1) never reaches CZ, so a straight run through A/B never triggers it.
 ];
 
 // Two thin walls crossing the corridor face-on (a plane at fixed x,
 // spanning the region's full z-range), each with a slot at the corridor's
 // z-line. Each wall sits 0.4-0.8 units past the column meant to flatten
-// the player for it.
+// the player for it — close enough that clearing the column and reaching
+// the wall is one continuous, still-flat motion.
 const WALLS = [
-  { x: 11.0, slotZ: CZ, half: 0.75, passed: false, lastHit: -99, stuckT: 0, promptOn: false, mesh: null },
-  { x: 16.1, slotZ: CZ, half: 0.75, passed: false, lastHit: -99, stuckT: 0, promptOn: false, mesh: null },
+  { x: 11.0, slotZ: CZ, half: 0.75, passed: false, lastHit: -99, stuckT: 0, promptOn: false, mesh: null },  // 0.5 past A's edge (10.5)
+  { x: 20.3, slotZ: CZ, half: 0.75, passed: false, lastHit: -99, stuckT: 0, promptOn: false, mesh: null },  // 0.5 past B's edge (19.8)
 ];
 
-// The gap: a 1.2-unit trench crossing the corridor, a strip across x now
-// that the corridor runs east. NEAR is the lip closer to the entrance
-// (smaller x); FAR is the far lip.
-const GAP_NEAR = 21.0, GAP_FAR = 22.2;
-const GOAL = new THREE.Vector3(24.5, 0, CZ);
+// The gap: a trench crossing the corridor, spanning the region's full z so
+// it can be met (and crossed) off the CZ line, near column C. GAP_NEAR sits
+// 4.2 units past column B's edge (19.8) — well outside any on-line column's
+// carry — so a straight run down the corridor meets it at full size the
+// first time. Column C's far edge (22+1.5=23.5) sits only 0.5 units short
+// of it, so squashing in C and stepping across (even off-line) crosses it flat.
+const GAP_NEAR = 24.0, GAP_FAR = 25.4;
+const GOAL = new THREE.Vector3(27.6, 0, CZ);
 
-let slotsPassed = 0, goalReached = false, wallHits = 0;
+// hoisted: `for...of ['rimNear','rimFar']` was reallocating this array
+// every in-region frame of the whole game.
+const RIM_KEYS = ['rimNear', 'rimFar'];
+
+let slotsPassed = 0, goalReached = false, wallHits = 0, gapCrossed = false;
 let flatRaw = 0, flatVel = 0, wasSquashed = false, holdT = 0;
 let fallActive = false, fallT = 0, fallSide = 'near';
 const fallPos = new THREE.Vector3();
@@ -77,14 +111,18 @@ function getP3() {
 }
 
 // a private veil, independent of the eye button's — dims everything but
-// what's self-luminous (the column, the slot, the player) while flat.
-// Inserted as #ui's FIRST child so the HUD and pad — appended after it —
-// draw on top and stay legible and touchable while the veil is up.
+// what's self-luminous (the column, the slot, the player) while flat, and
+// visibly drains during the carry: it starts fading the instant the player
+// leaves a column's radius (tied to the hold timer), reaching zero exactly
+// when the carry runs out, rather than staying pinned dark until the spring
+// suddenly lets go. Inserted as #ui's FIRST child so the HUD and pad —
+// appended after it — draw on top and stay legible and touchable while the
+// veil is up.
 const veilEl = document.createElement('div');
 veilEl.id = 'thin-veil';
 veilEl.style.cssText = 'position:absolute;inset:0;background:#02030a;opacity:0;pointer-events:none';
 { const ui = document.getElementById('ui'); ui.insertBefore(veilEl, ui.firstChild); }
-let lastVeilOp = '0';
+let lastVeilRaw = -1;   // write only when the opacity actually moves — was toFixed()'d every in-region frame
 
 function buildColumn(c) {
   const g = new THREE.Group();
@@ -107,17 +145,38 @@ function buildColumn(c) {
 // A wall crosses the corridor face-on: a plane at fixed x, spanning z, with
 // a slot cut into it at `slotZ`. Two thin rails flank the slot (rather than
 // a marker plate across it) so the opening reads as open, not covered.
+// Second review: at full size the panel was near-invisible (0x1a7fa0 @ .45
+// over a near-black floor); it now reads as a real wall — brighter, less
+// transparent, a bottom edge bar to match the top one, and vertical ribs
+// every unit so the panel occludes the grid instead of washing over it.
 function buildWall(w) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshBasicMaterial({ color: 0x1a7fa0, transparent: true, opacity: .45, depthWrite: false, side: THREE.DoubleSide });
-  const edgeMat = new THREE.MeshBasicMaterial({ color: 0xaefcff });
+  const mat = new THREE.MeshBasicMaterial({ color: 0x49c8e8, transparent: true, opacity: .82, side: THREE.DoubleSide });
+  const edgeMat = new THREE.MeshBasicMaterial({ color: 0xd7fdff });
+  const ribMat = new THREE.MeshBasicMaterial({ color: 0xeafeff, transparent: true, opacity: .85 });
   const segs = [[BOUNDS.z0, w.slotZ - w.half], [w.slotZ + w.half, BOUNDS.z1]];
+  const ribZs = [];
   for (const [sz0, sz1] of segs) {
     const width = sz1 - sz0; if (width <= .02) continue;
     const wall = new THREE.Mesh(new THREE.BoxGeometry(.22, 2.4, width), mat.clone());
     wall.position.set(w.x, 1.2, (sz0 + sz1) / 2); g.add(wall);
-    const edge = new THREE.Mesh(new THREE.BoxGeometry(.26, .05, width), edgeMat);
-    edge.position.set(w.x, 2.42, (sz0 + sz1) / 2); g.add(edge);
+    const edgeTop = new THREE.Mesh(new THREE.BoxGeometry(.3, .06, width), edgeMat);
+    edgeTop.position.set(w.x, 2.42, (sz0 + sz1) / 2); g.add(edgeTop);
+    const edgeBot = new THREE.Mesh(new THREE.BoxGeometry(.3, .06, width), edgeMat);
+    edgeBot.position.set(w.x, .03, (sz0 + sz1) / 2); g.add(edgeBot);
+    // vertical ribs every ~1 unit so the panel reads as structure and
+    // occludes the ground grid, instead of a flat colour wash over it —
+    // collected and drawn as one InstancedMesh per wall (below) rather
+    // than ~15 separate meshes each, which was measurably heavier on the
+    // headless (SwiftShader) renderer this game's own tests run under.
+    const first = Math.ceil(sz0);
+    for (let z = first; z < sz1 - .1; z++) ribZs.push(z);
+  }
+  if (ribZs.length) {
+    const ribs = new THREE.InstancedMesh(new THREE.BoxGeometry(.27, 2.44, .07), ribMat, ribZs.length);
+    const m = new THREE.Matrix4();
+    ribZs.forEach((z, i) => { m.makeTranslation(w.x, 1.2, z); ribs.setMatrixAt(i, m); });
+    g.add(ribs);
   }
   const postMat = new THREE.MeshBasicMaterial({ color: 0xdfffff });
   const rails = [];
@@ -202,22 +261,29 @@ function animateCosmetics(t, inRegion) {
   if (gapMesh.rimNear) {
     const k = Math.max(0, Math.min(1, flatRaw));
     const flare = t - flareT < .4 ? 1 - (t - flareT) / .4 : 0;
-    for (const which of ['rimNear', 'rimFar']) {
+    // the gap loses its *width* while flat: shrink the hole's x-extent
+    // (along the corridor) and the rims' thickness toward a hairline —
+    // scaling .y did nothing from the overhead camera the player actually
+    // sees this in.
+    gapMesh.hole.scale.x = THREE.MathUtils.lerp(1, .05, k);
+    for (const which of RIM_KEYS) {
       const r = gapMesh[which];
-      let sy = THREE.MathUtils.lerp(1, .16, k), op = THREE.MathUtils.lerp(.8, .22, k);
-      if (flare > 0 && which === (flareSide === 'far' ? 'rimFar' : 'rimNear')) { sy = Math.max(sy, 1 + flare * 1.6); op = Math.max(op, .8 + flare * .5); }
-      r.scale.y = sy; r.material.opacity = Math.min(1, op);
+      let sx = THREE.MathUtils.lerp(1, .16, k), op = THREE.MathUtils.lerp(.8, .22, k);
+      if (flare > 0 && which === (flareSide === 'far' ? 'rimFar' : 'rimNear')) { sx = Math.max(sx, 1 + flare * 1.6); op = Math.max(op, .8 + flare * .5); }
+      r.scale.x = sx; r.material.opacity = Math.min(1, op);
     }
   }
 }
 
-function animateGoalLight(t) {
+function animateGoalLight(t, inRegion, earned) {
   if (!goalLightGroup) return;
   const u = goalLightGroup.userData;
   goalLightGroup.position.y = .5 + .12 * Math.sin(t * 2.1);
   goalLightGroup.rotation.y = t * .5;
-  if (u.ring) u.ring.rotation.z = t * .25;
-  if (u.beam) u.beam.material.opacity = .13 + .10 * (.5 + .5 * Math.sin(t * 3.2));
+  if (u.ring) { u.ring.rotation.z = t * .25; u.ring.material.opacity = earned ? .65 : .2; }
+  if (u.core) u.core.material.emissiveIntensity = earned ? 4 : 1.1;
+  if (u.beam) { u.beam.visible = earned; if (earned) u.beam.material.opacity = .13 + .10 * (.5 + .5 * Math.sin(t * 3.2)); }
+  if (u.glow) u.glow.visible = inRegion;   // another live PointLight — was lit everywhere, even outside the region
   goalLightGroup.visible = !goalReached;
 }
 
@@ -265,10 +331,11 @@ const REGION = registerRegion({
   update(dt, t) {
     const inRegion = curRegion === REGION;
     const p3 = getP3();
+    const earned = slotsPassed === WALLS.length && gapCrossed;
 
     animateCosmetics(t, inRegion);
     updateTwins(t);
-    animateGoalLight(t);
+    animateGoalLight(t, inRegion, earned);
 
     if (inRegion) {
       if (fallActive) tweenFall(p3);
@@ -294,8 +361,14 @@ const REGION = registerRegion({
     wasSquashed = squashed;
     if (extraBlipAt > 0 && t >= extraBlipAt) { blip(760, .06, .045, 'sine'); extraBlipAt = -1; }
 
-    const vOp = (.35 * Math.max(0, Math.min(1, flatRaw))).toFixed(3);
-    if (vOp !== lastVeilOp) { veilEl.style.opacity = vOp; lastVeilOp = vOp; }
+    // the veil: dark while squashed, but also a visible drain on the carry
+    // itself — it starts lightening the instant the player leaves a
+    // column's radius, in step with the hold timer, reaching zero exactly
+    // when the carry runs dry (rather than staying pinned dark until the
+    // spring lets go on its own).
+    const carryFrac = insideAny ? 1 : (HOLD_TIME > 0 ? holdT / HOLD_TIME : 0);
+    const vOpRaw = .35 * Math.max(0, Math.min(1, flatRaw)) * Math.max(0, Math.min(1, carryFrac));
+    if (Math.abs(vOpRaw - lastVeilRaw) > .01) { lastVeilRaw = vOpRaw; veilEl.style.opacity = vOpRaw.toFixed(3); }
 
     for (const w of WALLS) {
       if (w.passed) { w.stuckT = 0; continue; }
@@ -309,9 +382,14 @@ const REGION = registerRegion({
       }
     }
 
+    // the goal only completes once both slots and a genuine flat crossing
+    // of the gap have happened — never on proximity alone. Approaching from
+    // behind the far lip (walking around the region's edge instead of down
+    // the corridor) never sets `gapCrossed`, so it can never finish the
+    // region either; the corridor is the only real way in.
     if (!goalReached) {
       const d = Math.hypot(playerPos.x - GOAL.x, playerPos.z - GOAL.z);
-      if (d < 1.0) {
+      if (d < 1.0 && earned) {
         goalReached = true; chime(); addAwake(.12);
         emitRipple(GOAL.x, GOAL.z, 1.5, PALE_COL); saveGame(); refreshHud();
       }
@@ -319,7 +397,13 @@ const REGION = registerRegion({
   },
 
   constrain(prevX, prevZ, pos, vel, dt) {
-    if (pos.x < BOUNDS.x0 - 2 || pos.x > BOUNDS.x1 + 2 || pos.z > BOUNDS.z1 + 2 || pos.z < BOUNDS.z0 - 2) return;
+    // Rules stop dead at the region's own drawn extent — not a padded
+    // approximation of it. Without this a player standing in the open
+    // field between regions (e.g. z=-10, just past this region's z1=-11)
+    // used to catch an invisible wall or fall through an invisible hole
+    // that only ever existed *inside* Thin's bounds.
+    if (curRegion !== REGION) return;
+    if (pos.z < BOUNDS.z0 || pos.z > BOUNDS.z1) return;
     const t = clock.elapsedTime;
 
     if (fallActive) {
@@ -339,6 +423,7 @@ const REGION = registerRegion({
     if (nowInsideGap && wasOutsideGap) {
       if (flat > .8) {
         pulseFlash(); emitRipple(pos.x, pos.z, 1.4, PALE_COL); slide(480, 760, .3, .07);
+        gapCrossed = true;
       } else {
         fallActive = true; fallT = 0; fallPos.copy(pos);
         fallSide = prevX <= GAP_NEAR ? 'near' : 'far';
@@ -365,7 +450,7 @@ const REGION = registerRegion({
 
   onLeave() {
     setFlat(0); flatRaw = 0; flatVel = 0; wasSquashed = false; holdT = 0; extraBlipAt = -1;
-    veilEl.style.opacity = '0'; lastVeilOp = '0';
+    veilEl.style.opacity = '0'; lastVeilRaw = -1;
     const wePrompted = WALLS.some(w => w.promptOn);
     for (const w of WALLS) { w.stuckT = 0; w.promptOn = false; }
     if (wePrompted) setPrompt('');
@@ -374,18 +459,20 @@ const REGION = registerRegion({
   hud() { return { label: 'SLOTS', n: slotsPassed, total: WALLS.length }; },
   done() { return goalReached; },
 
-  save() { return { slotsPassed, goalReached, wallsPassed: WALLS.map(w => w.passed) }; },
+  save() { return { slotsPassed, goalReached, gapCrossed, wallsPassed: WALLS.map(w => w.passed) }; },
   load(d) {
     slotsPassed = d.slotsPassed | 0;
     goalReached = !!d.goalReached;
+    gapCrossed = !!d.gapCrossed;
     if (Array.isArray(d.wallsPassed)) WALLS.forEach((w, i) => { w.passed = !!d.wallsPassed[i]; });
     if (goalLightGroup) goalLightGroup.visible = !goalReached;
   },
 
   debug() {
     return {
-      slotsPassed, total: WALLS.length, goalReached, fallActive, wallHits,
+      slotsPassed, total: WALLS.length, goalReached, gapCrossed, fallActive, wallHits,
       flat: +THREE.MathUtils.clamp(flatRaw, 0, 1.4).toFixed(2),
+      holdT: +holdT.toFixed(2),
       cols: COLS.map(c => ({ x: c.x, z: c.z, r: c.r })),
       walls: WALLS.map(w => ({ x: w.x, slotZ: w.slotZ, half: w.half, passed: w.passed })),
       gap: { near: GAP_NEAR, far: GAP_FAR },
