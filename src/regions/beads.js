@@ -17,8 +17,8 @@ const FAR_X = 0.5;           // where a poured bead reappears on the far half
 const XMIN = PAGE.x0, XMAXFAR = 10.4, ZMIN = PAGE.z0, ZMAX = PAGE.z1;
 const TILT_G = 7.5;
 const SIGMA = 1.4, SIGMA2 = SIGMA * SIGMA, WELL_A = 6.5;
-const FILL_R = 1.15, FILL_R2 = FILL_R * FILL_R, FILL_COUNT = 36;
-const BASE_COLOR = new THREE.Color(0x8fe6ff);
+const FILL_R = 1.25, FILL_R2 = FILL_R * FILL_R, FILL_COUNT = 36;
+const BASE_COLOR = new THREE.Color(0xbdf3ff);
 const LIT_COLOR = new THREE.Color(0xffffff);
 const FAR_COLOR = new THREE.Color(0xffe39b);
 
@@ -251,7 +251,7 @@ registerRegion({
   bounds: PAGE,
   entrance: new THREE.Vector3(-3, 0, -1),
   build() {
-    const geo = new THREE.IcosahedronGeometry(.062, 0);
+    const geo = new THREE.IcosahedronGeometry(.13, 1);   // the 2D camera shows ~20 units across a phone: a bead has to be ~5px to read
     const mat = new THREE.MeshBasicMaterial({
       color: 0xffffff, vertexColors: true, transparent: true, opacity: .92,
       blending: THREE.AdditiveBlending, depthWrite: false,

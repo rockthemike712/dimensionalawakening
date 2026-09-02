@@ -13,8 +13,13 @@ import {registerRegion, world, playerPos, dim, crossed, emitRipple, blip, chime,
 
 const CX=27, CZ=0, HALFW=12, HALFH=9, FOLD_MAX=1.42;
 const COLOR=0xffcf6e;
-const RAW1=new THREE.Vector3(37,0,7);   // order A->B gate (the brief's "far corner" light)
-const RAW2=new THREE.Vector3(33,0,3);   // order B->A gate
+// where the far-quarter lights stand on the flat paper. With both edges pulled
+// (81 degrees each, like the first fold) the A-then-B order carries the first
+// one to about (27.9, 3.9 up, -5.4) and the B-then-A order carries the second
+// to about (21.7, 4.9 up, .9): each hangs a few units over the ground, a few
+// steps from the crossing, and only in its own order.
+const RAW1=new THREE.Vector3(33,0,3);   // order A->B gate
+const RAW2=new THREE.Vector3(31,0,6);   // order B->A gate
 const COLLECT_R=1.7;
 
 // ---------- fold state (springs, not plain eases: they overshoot on latch) ----------

@@ -129,7 +129,7 @@ await page.waitForTimeout(300);
 const litBeforeReload = (await beadsState()).lit;
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForTimeout(600);
-await page.evaluate(() => window.__DA.applySave(window.__DA.loadSave()));
+await page.evaluate(() => window.__DA.applySave(Object.assign(window.__DA.loadSave()||{}, {crossed:true})));   // Continue is only offered once crossed; force it here
 await page.waitForTimeout(500);
 const afterLoad = await beadsState();
 console.log('lit before reload / after load:', litBeforeReload, afterLoad.lit);

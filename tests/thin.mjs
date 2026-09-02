@@ -84,6 +84,7 @@ if (!st.walls[0].passed || !st.walls[1].passed) errors.push('wall debug state no
 await setPos(15, -22.0); // off the corridor, before the gap, full size
 await page.waitForTimeout(150);
 r = await walk('ArrowLeft', { untilZ: z => z <= -23.2, maxMs: 10000 }); // unreachable if it actually falls and resets
+{ const t0=Date.now(); while(Date.now()-t0<6000){ const st=await thinState(); if(!st.fallActive)break; await page.waitForTimeout(100);} await page.waitForTimeout(200); r={z:(await page.evaluate(()=>window.__DA.pos))[2]}; }
 console.log('fell into the gap at full size, ended at z=' + r.z.toFixed(2));
 await page.screenshot({ path: shotDir + 'thin-03-gap-fallback.png' });
 if (r.z < -22.4 - 0.15) errors.push('player was not put back on the near lip of the gap (z=' + r.z.toFixed(2) + ')');

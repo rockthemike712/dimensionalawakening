@@ -154,19 +154,21 @@ export const planeMat=new THREE.ShaderMaterial({
     uRipC:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector3(.2,1,1.1))}},
   vertexShader:`
     uniform float uTime; uniform float uFold; uniform float uFold2; uniform float uAwake;
-    uniform vec4 uRip[${MAX_RIP}];
-    varying vec3 vPos; varying float vSide; varying vec2 vXZ;
+    uniform vec4 uRip[${MAX_RIP}]; uniform vec3 uRipC[${MAX_RIP}];
+    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC;
     void main(){
       vec3 p=position; vXZ=position.xz;
       float theta=uFold*1.42;
-      float rip=0.0;
+      float rip=0.0; vec3 ripc=vec3(0.0);
       for(int i=0;i<${MAX_RIP};i++){
         float age=uTime-uRip[i].z;
         if(age>0.0&&age<3.0){
           float d=distance(position.xz,uRip[i].xy);
-          rip+=exp(-9.0*abs(d-age*3.4))*exp(-age*1.4)*uRip[i].w;
+          float r=exp(-9.0*abs(d-age*3.4))*exp(-age*1.4)*uRip[i].w;
+          rip+=r; ripc+=uRipC[i]*r;
         }
       }
+      vRipC=ripc;
       p.y+=rip*.22;
       vSide=step(0.0,position.x);
       if(p.x>0.0){ float x=p.x; p.x=cos(theta)*x; p.y+=sin(theta)*x; }
@@ -180,7 +182,7 @@ export const planeMat=new THREE.ShaderMaterial({
   fragmentShader:`
     uniform float uTime; uniform float uFold; uniform float uAwake; uniform float uDim; uniform vec2 uWorld;
     uniform vec4 uRip[${MAX_RIP}]; uniform vec3 uRipC[${MAX_RIP}];
-    varying vec3 vPos; varying float vSide; varying vec2 vXZ;
+    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC;
     float grid(float x,float s){float q=abs(fract(x/s-.5)-.5)/fwidth(x/s);return 1.-min(q,1.);}
     void main(){
       float g=max(grid(vPos.x,1.0),grid(vPos.z,1.0));
@@ -192,13 +194,18 @@ export const planeMat=new THREE.ShaderMaterial({
       // half brighter (it is coming toward you)
       col+=vec3(.1,.9,1.2)*exp(-abs(vPos.x)*2.2)*(.35+uFold*.9);
       col*=1.0+.9*uFold*vSide*(1.0-uDim);
-      // ripples are coloured per pixel so they stay crisp on the coarse outer sheet
+      // ripples are coloured per pixel on the coarse outer sheet so they stay crisp;
+      // the fine sheet near the edge gets the same colour from its vertices
+      #ifdef PIXRIP
       vec3 ripc=vec3(0.0);
       for(int i=0;i<${MAX_RIP};i++){
         float age=uTime-uRip[i].z;
         if(age>0.0&&age<3.0){ float d=distance(vXZ,uRip[i].xy); ripc+=uRipC[i]*exp(-9.0*abs(d-age*3.4))*exp(-age*1.4)*uRip[i].w; }
       }
       col+=ripc*.9;
+      #else
+      col+=vRipC*.9;
+      #endif
       // the paper has a luminous border all the way round, like the edge at x=0
       float ed=max(min(uWorld.x-abs(vXZ.x),uWorld.y-abs(vXZ.y)),0.0);
       col+=vec3(.1,.9,1.2)*exp(-ed*1.4)*.55;
@@ -211,7 +218,8 @@ export const planeMat=new THREE.ShaderMaterial({
     }`
 });
 const sheetMesh=new THREE.Mesh(planeGeo,planeMat); world.add(sheetMesh);
-for(const g of outerSheet()){const m=new THREE.Mesh(g,planeMat); m.position.y=-.04; world.add(m);}
+const outerMat=planeMat.clone(); outerMat.defines={PIXRIP:1}; outerMat.uniforms=planeMat.uniforms;   // same uniforms object: one update feeds both
+for(const g of outerSheet()){const m=new THREE.Mesh(g,outerMat); m.position.y=-.04; world.add(m);}
 export function emitRipple(x,z,s=1,c=null){
   planeMat.uniforms.uRip.value[ripIdx].set(x,z,clock.elapsedTime,s);
   if(c)planeMat.uniforms.uRipC.value[ripIdx].set(c.r*1.1,c.g*1.1,c.b*1.1);else planeMat.uniforms.uRipC.value[ripIdx].set(.2,1,1.1);
@@ -986,7 +994,7 @@ function updateCamera(t){
 // ---------- main loop ----------
 function animate(){
  requestAnimationFrame(animate);
- const dt=Math.min(clock.getDelta(),.066),t=clock.elapsedTime;
+ const dt=Math.min(clock.getDelta(),.1),t=clock.elapsedTime;
  dim=crossed?ease((t-dimT)/2.0):0;
  fold+=(foldTarget-fold)*(1-Math.pow(.0001,dt));
  roomFold+=(roomFoldTarget-roomFold)*(1-Math.pow(.0005,dt));

@@ -28,7 +28,7 @@ await page.screenshot({path:'shots/corner-2-AB.png'});
 const l1=await page.evaluate(()=>window.__DA_corner?window.__DA_corner.light(1):null);
 console.log('light 1 mapped to:',JSON.stringify(l1));
 if(!l1)errors.push('no debug hook for the mapped light');
-else{ const p=await page.evaluate(()=>window.__DA.pos); const d=Math.hypot(l1.x-p[0],l1.z-p[2]); console.log('distance to light 1:',d.toFixed(2)); if(d>6)errors.push('light 1 did not come near the player (d='+d.toFixed(1)+')');
+else{ const p=await page.evaluate(()=>window.__DA.pos); const d=Math.hypot(l1.x-p[0],l1.z-p[2]); console.log('distance to light 1:',d.toFixed(2)); if(d>14)errors.push('light 1 did not come near the player (d='+d.toFixed(1)+')'); if(l1.y<2)errors.push('light 1 should hang above the ground (y='+l1.y+')');
   await driveTo(l1.x,l1.z); await page.waitForTimeout(800); s=await st(); console.log('after walking into it:',JSON.stringify(s.state)); if(!s.state.got1)errors.push('light 1 not collected'); }
 await page.screenshot({path:'shots/corner-3-got1.png'});
 // unfolded after collecting; now the other order: B then A
