@@ -132,7 +132,7 @@ const region=registerRegion({
         this.shadowVisible=true;
       }
     }
-    this.shadowGroup.visible=this.shadowVisible&&!this.swapped;
+    this.shadowGroup.visible=this.shadowVisible&&!this.swapped&&insideMe;   // the shadow exists only under this lamp
     if(this.shadowGroup.visible){
       this.shadowGroup.position.set(this.shadowPos.x,.03,this.shadowPos.z);
       const stretch=THREE.MathUtils.clamp(1+(Math.abs(this.lastS)-1)*.025,.9,1.6);

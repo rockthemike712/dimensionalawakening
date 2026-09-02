@@ -142,7 +142,9 @@ function outerSheet(){   // 4x4 chunks so the far ones are frustum-culled
       const a=j*(nx+1)+i, b=a+1, c=a+nx+1, d=c+1; idx.push(a,c,b,b,c,d);
     }
     if(!idx.length)continue;
-    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setIndex(idx); g.computeBoundingSphere(); out.push(g);
+    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setIndex(idx); g.computeBoundingSphere();
+    g.boundingSphere.radius+=Math.max(0,x0+W);      // the fold lifts x>0 vertices by up to their x: keep them inside the culling sphere
+    out.push(g);
   }
   return out;
 }
@@ -1046,6 +1048,7 @@ function animate(){
    beaconArrow.style.top=Math.max(105,Math.min(innerHeight-200,sy))+'px';
    beaconArrow.style.transform='translate(-50%,-50%) rotate('+ang+'deg)';
  }else beaconArrow.style.opacity=0;
+ fitViewport();
  renderer.render(scene,camera);
 }
 function nextRegion(){
@@ -1138,7 +1141,14 @@ export function start(){
   refreshHud(); offerResume();
   animate();
 }
-addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+let lastW=innerWidth, lastH=innerHeight;
+function fitViewport(){
+  const w=Math.max(1,innerWidth), h=Math.max(1,innerHeight); if(w===lastW&&h===lastH)return;
+  lastW=w; lastH=h; camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h);
+}
+addEventListener('resize',fitViewport);
+addEventListener('orientationchange',()=>setTimeout(fitViewport,120));
+if(window.visualViewport)visualViewport.addEventListener('resize',fitViewport);
 
 // read-only state hook for automated smoke tests
 window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get seeds(){return seeds},get moves(){return moveCount},
