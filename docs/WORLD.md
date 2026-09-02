@@ -59,7 +59,7 @@ Everything is optional except `id`, `name`, `bounds`, `entrance`.
 | id | bounds | direction from the room |
 |---|---|---|
 | room | x 1.4..11.8, z -8..8 | — |
-| thin | x 4..26, z -27..-11 | north (`-z`, "left" on the pad) |
+| thin | x 4..31, z -27..-11 | north (`-z`, "left" on the pad) |
 | corner | x 15..39, z -9..9 | east (`+x`, "up" on the pad) |
 | lamp | x 4..26, z 11..27 | south (`+z`, "right" on the pad) |
 | beads | the 2D page, `x<0` | (a 2D-side toy; see its brief) |
@@ -95,6 +95,8 @@ Keep a 1.5-unit margin inside your bounds for reeds and walking.
   exposure). Use sparingly at real milestones (≤ .15 each).
 - `landmarks`, `ringLandmark(l,strength,dir,t)` — the reeds, if you want them.
 - `saveGame()` — call after any milestone so Continue restores it.
+- `lookBack(seconds)` — the camera yaws round for a moment and returns; the pad is
+  ignored meanwhile. For a beat that happens behind the player.
 - `flat`, `setFlat(v)`, `shape()` — local flattening. `setFlat(1)` squashes the
   player back to a disc, swings the camera overhead and collapses the reeds to
   lines **without changing which way the pad points** (up stays `+x`). Values

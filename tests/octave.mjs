@@ -18,7 +18,11 @@ if(!A||!B||!F){errors.push('seeded octave/fifth reeds missing on the 2D side');}
 else{
   // 1. brush: walk through A, it rings and bends
   const r0=await DA('rings'); await driveTo(A.x+1.5,A.z); await page.waitForTimeout(300);
-  await page.keyboard.down('ArrowLeft'); let maxBend=0,maxRing=0; for(let k=0;k<12;k++){await page.waitForTimeout(60);lm=await DA('lm');maxBend=Math.max(maxBend,lm[A.i].bend);maxRing=Math.max(maxRing,lm[A.i].ring);} await page.keyboard.up('ArrowLeft');
+  // hold Left until A itself rings (headless frame rate varies with load), then watch it sway
+  await page.keyboard.down('ArrowLeft'); let maxBend=0,maxRing=0; { const t0=Date.now(); let rung=false;
+    while(Date.now()-t0<8000){ await page.waitForTimeout(60); lm=await DA('lm'); maxBend=Math.max(maxBend,lm[A.i].bend); maxRing=Math.max(maxRing,lm[A.i].ring);
+      if(lm[A.i].ring>0)rung=true; if(rung&&maxBend>.3)break; if(rung&&Date.now()-t0>3000)break; } }
+  await page.keyboard.up('ArrowLeft');
   console.log('after brushing A: rings=',await DA('rings')-r0,'peak ring=',maxRing,'peak bend=',maxBend);
   if(await DA('rings')-r0<1)errors.push('brushing a reed did not ring it'); if(maxBend<.3)errors.push('reed did not bend');
   // 2. glue: ring A then B within a second (taps at range)
