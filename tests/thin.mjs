@@ -185,8 +185,10 @@ await page.waitForTimeout(400);
 {
   const flatNow = await DA('flat');
   const veilOp = await page.evaluate(() => getComputedStyle(document.getElementById('thin-veil')).opacity);
-  const promptVis = await page.evaluate(() => getComputedStyle(document.getElementById('prompt')).visibility);
-  console.log('after leaving: flat=' + flatNow + ' veilOpacity=' + veilOp + ' promptVisibility=' + promptVis);
+  // the core may show its own 'Follow the lights.' once the player has digested; only the region's prompt must be gone
+  const promptTxt = await page.evaluate(() => { const e=document.getElementById('prompt'); return getComputedStyle(e).visibility==='hidden'?'':e.textContent; });
+  const promptVis = promptTxt==='' || promptTxt==='Follow the lights.' ? 'hidden' : 'visible';
+  console.log('after leaving: flat=' + flatNow + ' veilOpacity=' + veilOp + ' prompt="' + promptTxt + '"');
   if (flatNow !== 0) errors.push('flat did not reset to 0 after leaving the region (flat=' + flatNow + ')');
   if (Math.abs(parseFloat(veilOp)) > 0.001) errors.push('veil did not clear after leaving the region (opacity=' + veilOp + ')');
   if (promptVis !== 'hidden') errors.push('prompt still visible after leaving the region');
