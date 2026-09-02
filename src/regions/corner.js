@@ -13,29 +13,26 @@ import {registerRegion, world, playerPos, dim, crossed, emitRipple, blip, chime,
 
 const CX=27, CZ=0, HALFW=12, HALFH=9, FOLD_MAX=1.42;
 const COLOR=0xffcf6e;
-// where the far-quarter lights stand on the flat paper.
-// Edge A's hinge sits at world x=27; edge B's hinge sits at world z=0 — the
-// same value as the entrance's z. That coincidence is why only a fold that
-// applies B *first* (order B->A) can bring a point's world-x close to the
-// entrance (16.5,0): applying B first lets A's rotation afterward mix a big
-// chunk of z into the final x. A fold that applies A first can never do the
-// mirror trick in x (A's own rotation never touches z), so its own gate is
-// pinned close to the x=27 hinge no matter which point on the quarter you
-// pick — the closest an A-first gate can land is ~10.5 units out, verified
-// by brute-force search over the whole quarter (see report). RAW1 below is
-// the closest achievable point for the A->B order; RAW2 already lands near
-// the entrance for B->A (checked the same way).
-const RAW1=new THREE.Vector3(28,0,4);   // order A->B gate (best achievable: ~10.6 from entrance)
-const RAW2=new THREE.Vector3(31,0,6);   // order B->A gate (~5.3 from entrance)
+// where the far-quarter lights stand on the flat paper. Both hinges pass
+// through the crossing, and the entrance now sits ON the crossing (CX,CZ)
+// too — so the corner comes to the player by construction, no matter which
+// order they pull in: the A->B gate (RAW1) lands ~0.4 units from the
+// crossing, the B->A gate (RAW2) ~5.3 units out (checked by direct
+// computation of warp() at fa=fb=1 for each order).
+const RAW1=new THREE.Vector3(28,0,4);   // order A->B gate (~0.4 from the crossing)
+const RAW2=new THREE.Vector3(31,0,6);   // order B->A gate (~5.3 from the crossing)
 const COLLECT_R=1.7;
+const GRAB_R=4.5;                       // must stand this close to the crossing for a pull to do anything
+const GHOST_R=1.7;                      // the mirrored self never strays farther (over ground) than this from where the camera is actually looking
+const GHOST_YMAX=1.1;                   // ...nor rises higher than this above the ground
 
 // ---------- fold state (springs, not plain eases: they overshoot on latch) ----------
 let foldA=0, foldAT=0, aVel=0;
 let foldB=0, foldBT=0, bVel=0;
 let order=0;                     // 0 = A pulled first (A then B), 1 = B first (B then A)
 let got1=false, got2=false, promptShown=false, stuckT=0;
-let dragA=false, dragAY=0, dragAT0=0;
-let dragB=false, dragBX=0, dragBT0=0;
+let dragA=false, dragAY=0, dragAT0=0, dragAPid=null;
+let dragB=false, dragBX=0, dragBT0=0, dragBPid=null;
 let rippleCoolA=0, rippleCoolB=0, humCoolA=0, humCoolB=0;
 let wrongNear1=false, wrongNear2=false, wrongTouches=0;
 
@@ -52,7 +49,7 @@ function warp(x,y,z,out){
   return out.set(CX+X,Y,CZ+Z);
 }
 // module-scope scratch: warp()'s out-params, reused every frame
-const _p1=new THREE.Vector3(), _p2=new THREE.Vector3(), _ghostMp=new THREE.Vector3();
+const _p1=new THREE.Vector3(), _p2=new THREE.Vector3(), _ghostMp=new THREE.Vector3(), _playerWarp=new THREE.Vector3();
 
 // ---------- ground patch: a clone of the sheet look, two hinges of its own ----------
 const geo=new THREE.PlaneGeometry(24,18,120,90); geo.rotateX(-Math.PI/2);
@@ -74,7 +71,10 @@ const mat=new THREE.ShaderMaterial({
       for(int i=0;i<${MAX_RIP};i++){
         float age=uTime-uRip[i].z;
         if(age>0.0&&age<3.0){
-          float d=distance(position.xz,uRip[i].xy);
+          // uRip carries world-space centers; this patch's own vertices are
+          // local to (CX,CZ), so shift into world space before comparing —
+          // otherwise every ring on this patch draws 27 units off (CX).
+          float d=distance(vWorld,uRip[i].xy);
           float r=exp(-9.0*abs(d-age*3.4))*exp(-age*1.4)*uRip[i].w;
           rip+=r; ripc+=uRipC[i]*r;
         }
@@ -169,16 +169,17 @@ function makeGroundMarker(){
 }
 const marker1=makeGroundMarker(), marker2=makeGroundMarker();
 
-// ---------- the mirrored player: the true reflection through the folded
-// quarter — no spin, moves opposite the player on screen ----------
-const ghost=new THREE.Group();
+// ---------- the mirrored player: reads as *you*, not as the gate — the
+// player's own white-cyan palette, lifted clear of its own shadow ----------
 const ghostCore=new THREE.Mesh(new THREE.IcosahedronGeometry(.36,2),
-  new THREE.MeshStandardMaterial({color:0x2a1600,emissive:0xffb35c,emissiveIntensity:3.4,roughness:.2,metalness:.15}));
+  new THREE.MeshStandardMaterial({color:0xdfffff,emissive:0x49e9ff,emissiveIntensity:3,roughness:.18,metalness:.15}));
 const ghostHalo=new THREE.Mesh(new THREE.SphereGeometry(.6,20,20),
-  new THREE.MeshBasicMaterial({color:0xffb35c,transparent:true,opacity:.1,blending:THREE.AdditiveBlending,depthWrite:false}));
+  new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.075,blending:THREE.AdditiveBlending,depthWrite:false}));
+ghostCore.position.y=.26; ghostHalo.position.y=.26;   // clear of the shadow at y=.02 — it was cutting the sphere at the equator
 const ghostShadow=new THREE.Mesh(new THREE.CircleGeometry(.5,28),
   new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:.3}));
 ghostShadow.rotation.x=-Math.PI/2; ghostShadow.position.y=.02;
+const ghost=new THREE.Group();
 ghost.add(ghostCore,ghostHalo,ghostShadow); ghost.visible=false;
 
 // ---------- input: grab an edge, drag perpendicular; tap toggles ----------
@@ -196,9 +197,13 @@ function pickGround(e){
 }
 function setTarget(which,val){
   const otherOn = which==='A' ? foldBT>.5 : foldAT>.5;
-  if(val>.5 && !otherOn) order = which==='A' ? 0 : 1;   // a fresh sequence starts with whichever is pulled first
+  // the newly raised edge is the one applied *last* — this must fire on
+  // every raise, not only when the other edge happens to be down already,
+  // or tapping an edge off and back on with the other still up leaves
+  // `order` stale while the player has physically redone the sequence.
+  if(val>.5) order = which==='A' ? (otherOn?1:0) : (otherOn?0:1);
   if(which==='A') foldAT=val; else foldBT=val;
-  const rz = which==='A' ? [-6,0,6].map(z=>[CX,z]) : [-6,0,6].map(x=>[x,CZ]);
+  const rz = which==='A' ? [-6,0,6].map(z=>[CX,CZ+z]) : [-6,0,6].map(x=>[CX+x,CZ]);
   for(const [x,z] of rz) emitRipple(x,z,.9);
   const delta=new THREE.Vector3(CX-playerPos.x,0,CZ-playerPos.z);
   const pan=THREE.MathUtils.clamp(delta.dot(rgt)/6,-1,1);
@@ -210,8 +215,15 @@ function onDown(e){
   const dA=Math.abs(pt.x-CX), dB=Math.abs(pt.z-CZ);
   const inA=dA<GRAB_W && Math.abs(pt.z-CZ)<HALFH+1, inB=dB<GRAB_W && Math.abs(pt.x-CX)<HALFW+1;
   if(!inA && !inB) return;
-  if(inA && (!inB || dA<=dB)){ dragA=true; dragAY=e.clientY; dragAT0=foldAT; }
-  else { dragB=true; dragBX=e.clientX; dragBT0=foldBT; }
+  // the corner does not fold from a distance — you have to be standing on
+  // the crossing to pull it. Off the crossing, a grab does nothing but a
+  // soft thud and a ripple at the X, so "stand on it" is learned by doing.
+  if(Math.hypot(playerPos.x-CX,playerPos.z-CZ)>GRAB_R){
+    blip(110,.16,.09,'sine'); emitRipple(CX,CZ,.5);
+    return;
+  }
+  if(inA && (!inB || dA<=dB)){ dragA=true; dragAY=e.clientY; dragAT0=foldAT; dragAPid=e.pointerId; }
+  else { dragB=true; dragBX=e.clientX; dragBT0=foldBT; dragBPid=e.pointerId; }
   try{renderer.domElement.setPointerCapture(e.pointerId);}catch(_){}
   audio(); emitRipple(CX,CZ,.7);
 }
@@ -247,6 +259,12 @@ function onUp(e){
 }
 
 function collect(n,p){
+  // a finger can still be down when the gate is reached mid-drag — clear the
+  // drag state and let go of the pointer *before* zeroing the fold targets,
+  // or the very next pointermove restores whichever edge is still held and
+  // the paper only half-springs back open.
+  if(dragA){ try{renderer.domElement.releasePointerCapture(dragAPid);}catch(_){} dragA=false; }
+  if(dragB){ try{renderer.domElement.releasePointerCapture(dragBPid);}catch(_){} dragB=false; }
   if(n===1){got1=true; light1.visible=false;} else {got2=true; light2.visible=false;}
   refreshHud(); chime(); pulseFlash();
   emitRipple(p.x,p.z,1.8,new THREE.Color(1,.85,.5));
@@ -257,12 +275,16 @@ function collect(n,p){
 // test hook: where a gate light is standing right now, after the folds
 window.__DA_corner={
   light(n){const p=warp(n===1?RAW1.x:RAW2.x,0,n===1?RAW1.z:RAW2.z);return {x:+p.x.toFixed(2),y:+p.y.toFixed(2),z:+p.z.toFixed(2)};},
+  ghost(){return {x:+ghost.position.x.toFixed(2),y:+ghost.position.y.toFixed(2),z:+ghost.position.z.toFixed(2),visible:ghost.visible};},
   get wrongTouches(){return wrongTouches;}
 };
 let region;
 region = registerRegion({
   id:'corner', name:'CORNERS', color:COLOR,
-  bounds:{x0:15,x1:39,z0:-9,z1:9}, entrance:new THREE.Vector3(16.5,0,0),
+  // the entrance sits ON the crossing itself, not at the bounds' edge — the
+  // core's beacon walks the player onto the X before they ever pull, so
+  // "stand on it" is the first thing they do here, not a rule found later.
+  bounds:{x0:15,x1:39,z0:-9,z1:9}, entrance:new THREE.Vector3(CX,0,CZ),
   build(){
     world.add(patch,dimMesh,ghost,marker1.g,marker2.g);
     world.add(edgeA.bar,edgeA.halo,edgeB.bar,edgeB.halo);
@@ -297,13 +319,32 @@ region = registerRegion({
     marker2.g.visible=!got2&&order===1; marker2.g.position.set(p2.x,.05,p2.z);
     marker1.ring.material.opacity=.55+.3*Math.sin(t*3); marker2.ring.material.opacity=.55+.3*Math.sin(t*3+1.7);
 
-    // the mirrored player: reflect x about the A hinge and z about the B
-    // hinge, then warp it onto the folded surface — a true reflection, so it
-    // moves opposite the player, not a spinning prop
-    const mirrorX=2*CX-playerPos.x, mirrorZ=2*CZ-playerPos.z;
-    const mp=warp(mirrorX,0,mirrorZ,_ghostMp);
-    ghost.position.copy(mp);
-    ghost.visible=crossed && Math.max(fa,fb)>.05 && !(got1&&got2);
+    // the mirrored player: a true point-reflection through the crossing
+    // moves opposite the player — but the camera follows the player, not
+    // the crossing, so a 1:1 reflection walks itself the *same* distance
+    // out the other side and straight out of a 36-degree portrait frustum
+    // the moment the player is more than a few units off the X (compressing
+    // it toward the fixed crossing doesn't fix this either: the gap between
+    // camera and ghost still grows without bound as the player wanders).
+    // Warp the *true* reflection first — that's what makes it stand on the
+    // actual tilted paper, folded quarter and all — then clamp the result
+    // to within GHOST_R over the ground of where the *camera itself* is
+    // actually looking: game.js aims the camera at foldedPoint(playerPos)
+    // with its y forced to 0 (this same warp() applied to the player, x/z
+    // only), so when the player stands in the doubly-folded quadrant their
+    // own view swings across too. Clamping against raw playerPos ignores
+    // that swing and the ghost drifts out of frame right along with it.
+    // Height is capped on its own — the camera never tracks it either.
+    const distX=Math.hypot(playerPos.x-CX,playerPos.z-CZ);
+    const rp=warp(playerPos.x,playerPos.y,playerPos.z,_playerWarp);
+    const raw=warp(2*CX-playerPos.x,0,2*CZ-playerPos.z,_ghostMp);
+    let gdx=raw.x-rp.x, gdz=raw.z-rp.z;
+    const glen=Math.hypot(gdx,gdz);
+    if(glen>GHOST_R){ const sc=GHOST_R/glen; gdx*=sc; gdz*=sc; }
+    ghost.position.set(rp.x+gdx, THREE.MathUtils.clamp(raw.y,0,GHOST_YMAX), rp.z+gdz);
+    // hide it once the player is standing right on the crossing — reflected
+    // through itself it would sit on top of the player, reading as nothing
+    ghost.visible=crossed && Math.max(fa,fb)>.05 && !(got1&&got2) && distX>1;
 
     const latched = fa>.9 && fb>.9;
     const d1=Math.hypot(playerPos.x-p1.x,playerPos.z-p1.z);
@@ -318,15 +359,18 @@ region = registerRegion({
     if(!got2 && order!==1 && near2){ if(!wrongNear2){wrongNear2=true;wrongTouches++;blip(150,.15,.08,'triangle');emitRipple(p2.x,p2.z,.7);} }
     else wrongNear2=false;
 
-    const activeGoal = order===0 ? p1 : p2, activeGot = order===0 ? got1 : got2;
-    if(curRegion===region && latched && !activeGot){
-      const near=Math.hypot(playerPos.x-activeGoal.x,playerPos.z-activeGoal.z)<COLLECT_R*2.2;
-      stuckT = near ? 0 : stuckT+dt;
-      if(stuckT>10 && !promptShown){ promptShown=true; setPrompt('Unfold. Pull the other one first.'); }
+    // every order always delivers *a* gate — there is no "wrong order" state
+    // to warn about. The one real failure is folding it and then wandering:
+    // both latched, standing more than 6 units off the X for 10 seconds.
+    if(curRegion===region && latched && distX>6){
+      stuckT += dt;
+      if(stuckT>10 && !promptShown){ promptShown=true; setPrompt('Stand on the crossing.'); }
     } else { stuckT=0; if(promptShown){promptShown=false; setPrompt('');} }
   },
   onLeave(){
     if(promptShown){promptShown=false; setPrompt('');}
+    if(dragA){ try{renderer.domElement.releasePointerCapture(dragAPid);}catch(_){} dragA=false; }
+    if(dragB){ try{renderer.domElement.releasePointerCapture(dragBPid);}catch(_){} dragB=false; }
     foldAT=0; foldBT=0; foldA=0; foldB=0; aVel=0; bVel=0;
     ghost.visible=false;
   },
@@ -339,5 +383,6 @@ region = registerRegion({
     if(got1) light1.visible=false; if(got2) light2.visible=false;
     refreshHud();
   },
-  debug(){ return {foldA:+foldA.toFixed(2), foldB:+foldB.toFixed(2), order, got1, got2, wrongTouches}; }
+  debug(){ return {foldA:+foldA.toFixed(2), foldB:+foldB.toFixed(2), order, got1, got2, wrongTouches,
+    marker1On:marker1.g.visible, marker2On:marker2.g.visible}; }
 });
