@@ -12,11 +12,24 @@
 // Second-review layout (critic: REVISE). The corridor's obstacles moved:
 // column A / wall A are unchanged (x=9 / x=11.0); column B is now at
 // x=18.3 (wall B at x=20.3); column C — the one that flattens the player
-// for the gap — sits *off* the corridor's z-line entirely, at (22,-18.6),
-// so a straight run through A and B never triggers it; the gap is now at
-// x=24.0..25.4, and the goal at x=27.6. HOLD_TIME dropped from 0.8s to
-// 0.25s so the carry drains between columns instead of lasting the whole
-// corridor. See src/regions/thin.js for the full reasoning.
+// for the gap — sits *off* the corridor's z-line entirely, so a straight
+// run through A and B never triggers it; the gap is at x=24.0..25.4, and
+// the goal at x=27.6. HOLD_TIME dropped from 0.8s to 0.25s so the carry
+// drains between columns instead of lasting the whole corridor.
+//
+// Third-review layout (critic: REVISE). The rhythm/walls/gap/out-of-bounds
+// fixes above all still pass; this round closes the region's edges:
+//  - The entrance moved to (7,-14) so column A is on screen from the first
+//    frame (item 6).
+//  - Column C moved from (22,-18.6) to (23.4,-18.4) so it's on screen from
+//    the put-back lip and a straight ArrowLeft from there crosses it
+//    (item 4).
+//  - Two open-field lanes that used to skirt the whole corridor (north
+//    along z~-9.5..-11, south between the world clamp and BOUNDS.z0) are
+//    now sealed (item 1); `debug().sealHits`/`debug().seal` expose the fix.
+//  - Standing on the unearned goal now refuses, counted in
+//    `debug().refusals` (item 2).
+// See src/regions/thin.js for the full reasoning.
 import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
 const errors = [];
 const browser = await chromium.launch();
@@ -94,11 +107,63 @@ async function nudgeToward(tx, tz, { thresh = .8, tol = .3, maxMs = 8000 } = {})
   return d;
 }
 
+// Holds a single key (no diagonal aim) until `flat` clears `thresh` or
+// `maxMs` elapses. Used for item 4: from the put-back lip, a *straight*
+// ArrowLeft (pure -z) must pass inside column C's radius now that C sits
+// at (23.4,-18.4), close in x to the lip (GAP_NEAR-.4 = 23.6).
+async function holdUntilFlat(key, thresh = .8, maxMs = 6000) {
+  await page.keyboard.down(key);
+  const t0 = Date.now(); let d = await sample();
+  while (Date.now() - t0 < maxMs) {
+    d = await sample();
+    if (d.flat >= thresh) break;
+    await page.waitForTimeout(60);
+  }
+  await page.keyboard.up(key);
+  await page.waitForTimeout(150);
+  return d;
+}
+
 await page.evaluate(() => window.__DA.jump3d());
-await setPos(9, -12.5);
+await setPos(7, -14);
 await page.waitForTimeout(300);
 if ((await DA('region')) !== 'thin') errors.push('did not land in the thin region at its entrance');
 await page.screenshot({ path: shotDir + 'thin-00-entrance.png' });
+
+// ---- item 6: from the entrance, column A must be the first thing seen —
+// its world point projects inside the 390px-wide viewport, not off the
+// left edge. ----
+{
+  const p = await page.evaluate(() => window.__DA.project(9, 0, -16));
+  console.log('item 6 project(9,0,-16) from entrance: x=' + p.x.toFixed(1) + ' y=' + p.y.toFixed(1));
+  if (p.x < 0 || p.x > 390) errors.push('column A does not project on screen from the entrance (x=' + p.x.toFixed(1) + ')');
+}
+
+// ---- item 2: standing on the unearned goal refuses, once per approach,
+// counted in debug().refusals. Done here, before any slot/gap progress,
+// so "unearned" is unambiguous. ----
+{
+  await setPos(27.6, -16); // the goal, exactly
+  await page.waitForTimeout(250);
+  let s = await thinState();
+  const firstRefusals = s.refusals;
+  console.log('refusal check: refusals after first approach=' + firstRefusals + ' done=' + (await thinDone()));
+  if (firstRefusals < 1) errors.push('standing on the unearned goal did not register a refusal (refusals=' + firstRefusals + ')');
+  if (await thinDone()) errors.push('the region finished by merely standing on the unearned goal');
+  await page.screenshot({ path: shotDir + 'thin-goal-refuses.png' });
+  await page.waitForTimeout(300);
+  s = await thinState();
+  if (s.refusals !== firstRefusals) errors.push('standing still on the unearned goal refused more than once (refusals=' + s.refusals + ')');
+  // step well away (past the hysteresis band) and back: a fresh approach
+  // refuses again. (27.6,-20), not (24,-16): the latter sits inside the
+  // gap's own x-span (24.0..25.4) and, full-size, would fall in (item 5).
+  await setPos(27.6, -20);
+  await page.waitForTimeout(200);
+  await setPos(27.6, -16);
+  await page.waitForTimeout(250);
+  s = await thinState();
+  if (s.refusals <= firstRefusals) errors.push('a second approach to the unearned goal did not refuse again (refusals=' + s.refusals + ')');
+}
 
 // ---- item 1 (twins): twin reeds must not skip the region. Run straight
 // through both twins (they sit on x=6.4/6.0, well off the actual corridor)
@@ -136,7 +201,7 @@ await page.screenshot({ path: shotDir + 'thin-gap-before-fall.png' });
 
 // ---- item 2: a full-size straight run must actually hit a wall — off the
 // corridor's z-line (z=-20), out of every column's reach (columns sit on
-// z=-16, and column C sits on z=-18.6 but far away in x), running east
+// z=-16, and column C sits on z=-18.4 but far away in x), running east
 // into wall A (x=11.0) ----
 await setPos(9, -20);
 await page.waitForTimeout(150);
@@ -148,35 +213,49 @@ let st = await thinState();
 if (st.wallHits <= 0) errors.push('wallHits did not register the block (wallHits=' + st.wallHits + ')');
 if (st.slotsPassed !== 0) errors.push('slotsPassed advanced without ever passing a slot (' + st.slotsPassed + ')');
 
-// ---- item 2's own verify: rules must stop dead at the region's drawn
-// z-extent (z0..z1 = -27..-11), not a padded approximation of it. At
-// z=-10 (just past z1, the open field toward the Corner) neither wall
-// (x=11.0, x=20.3) nor the gap (x=24.0..25.4) should do anything at all —
-// no thuds, no falling. ----
+// ---- item 2's own verify, revised for item 1's seal: rules must still
+// stop dead at the region's drawn z-extent for the segment that is *not*
+// sealed — west of wall A (x < SEAL_X0 = 10.5), z=-10 stays exactly as
+// untouched as before. East of wall A that same z=-10 line is now
+// deliberately sealed (item 1), so a run starting inside that span no
+// longer sails through to x=26 free; it gets pulled back into bounds and
+// registers a seal hit instead. ----
 {
-  await setPos(9.5, -10);
+  await setPos(6, -10); // well west of SEAL_X0 (10.5) and of wall A (11.0)
   await page.waitForTimeout(120);
-  const run = await walk('ArrowUp', { untilX: x => x >= 26.2, maxMs: 15000 });
+  // stop with a comfortable margin short of SEAL_X0 (10.5) — headless can
+  // render a single low-fps frame over a unit long, and this sub-test's
+  // whole point is that the seal has NOT fired yet on this side of it.
+  const run = await walk('ArrowUp', { untilX: x => x >= 8.5, maxMs: 6000 });
   const s = await thinState();
-  console.log('open-field run from (9.5,-10): x=' + run.x.toFixed(2) + ' fallActive-ever-seen check follows');
-  if (run.x < 26.0) errors.push('an invisible wall/hole stopped movement in the open field at z=-10 (x=' + run.x.toFixed(2) + ')');
+  console.log('open-field run from (6,-10), west of the seal: x=' + run.x.toFixed(2) + ' sealHits=' + s.sealHits);
+  if (run.x < 8.3) errors.push('an invisible wall stopped movement in the open field west of the seal at z=-10 (x=' + run.x.toFixed(2) + ')');
   if (s.fallActive) errors.push('fallActive was left true after an open-field run at z=-10');
+  if (s.sealHits > 0) errors.push('the seal fired west of its own span (x<' + s.seal.x0 + ') — sealHits=' + s.sealHits);
 }
 {
+  // east of wall A, z=-10 sits inside the sealed span (SEAL_X0..SEAL_X1):
+  // this used to reach x>=26.2 free (the exact second-review repro this
+  // test used to run). It must not any more.
   await setPos(20, -10);
   await page.waitForTimeout(120);
-  const run = await walk('ArrowUp', { untilX: x => x >= 26.2, maxMs: 12000 });
+  const run = await walk('ArrowUp', { untilX: x => x >= 26.2, maxMs: 8000 });
   const s = await thinState();
-  console.log('open-field run from (20,-10): x=' + run.x.toFixed(2));
-  if (run.x < 26.0) errors.push('an invisible wall/hole stopped movement in the open field at z=-10, second start (x=' + run.x.toFixed(2) + ')');
-  if (s.fallActive) errors.push('fallActive was left true after the second open-field run at z=-10');
+  console.log('sealed-flank run from (20,-10): x=' + run.x.toFixed(2) + ' sealHits=' + s.sealHits);
+  if (run.x >= 26.0) errors.push('the sealed flank did not stop the old (20,-10) open-field bypass (reached x=' + run.x.toFixed(2) + ')');
+  if (s.sealHits <= 0) errors.push('walking the sealed flank at z=-10 never registered a seal hit (sealHits=' + s.sealHits + ')');
 }
 
-// ---- item 3: the goal must not be reachable from behind the far lip
-// without ever passing the slots or crossing the gap. Old repro: spawn
-// just south of the region (open field) directly beside the goal, walk
-// straight in — slotsPassed stayed 0 and the region still finished. ----
+// ---- item 1's two named repros: both must end blocked, with a thud
+// (debug().sealHits) and a ripple. ----
 {
+  // north: setPos(27.6,-9.5) holding ArrowLeft used to walk straight over
+  // the goal without ever touching a wall or the gap. The seal now pulls
+  // z back inside bounds on the very first frame; the player still ends
+  // up on the goal's own tile (nothing at x=27.6 stops pure -z motion),
+  // but standing there unearned now refuses (item 2) rather than
+  // completing or silently doing nothing.
+  const refusalsBefore = (await thinState()).refusals;
   await setPos(27.6, -9.5); // due south of the goal (27.6,-16), just outside the region's z1=-11
   await page.waitForTimeout(120);
   await page.keyboard.down('ArrowLeft'); // -z, straight toward the goal
@@ -186,10 +265,97 @@ if (st.slotsPassed !== 0) errors.push('slotsPassed advanced without ever passing
   const s = await thinState();
   const done = await thinDone();
   const pos = await sample();
-  console.log('backdoor-goal check: pos=(' + pos.x.toFixed(2) + ',' + pos.z.toFixed(2) + ') slotsPassed=' + s.slotsPassed + ' gapCrossed=' + s.gapCrossed + ' done=' + done);
-  if (s.slotsPassed !== 0) errors.push('the backdoor approach advanced slotsPassed (' + s.slotsPassed + ')');
-  if (s.gapCrossed) errors.push('the backdoor approach set gapCrossed without ever crossing the gap');
-  if (done) errors.push('the region finished via the backdoor approach, without the slots or the gap');
+  console.log('north-flank repro: pos=(' + pos.x.toFixed(2) + ',' + pos.z.toFixed(2) + ') slotsPassed=' + s.slotsPassed
+    + ' gapCrossed=' + s.gapCrossed + ' sealHits=' + s.sealHits + ' refusals=' + s.refusals + ' done=' + done);
+  if (s.slotsPassed !== 0) errors.push('the north-flank repro advanced slotsPassed (' + s.slotsPassed + ')');
+  if (s.gapCrossed) errors.push('the north-flank repro set gapCrossed without ever crossing the gap');
+  if (done) errors.push('the region finished via the north-flank repro, without the slots or the gap');
+  if (s.sealHits <= 0) errors.push('the north-flank repro never registered a seal hit (sealHits=' + s.sealHits + ')');
+  if (s.refusals <= refusalsBefore) errors.push('the north-flank repro reached the goal without a refusal (refusals=' + s.refusals + ')');
+  await page.screenshot({ path: shotDir + 'thin-north-flank-sealed.png' });
+  // a clean vantage point showing the rail/panel itself, inside its own
+  // x-span (SEAL_X0..SEAL_X1) and just south of the sealed line (z=-11).
+  await setPos(15, -11.3);
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: shotDir + 'thin-north-flank-rail.png' });
+}
+{
+  // south: setPos(9,-27.3) holding ArrowUp used to slide east between the
+  // world clamp (-27.5) and BOUNDS.z0 (-27), past every wall's x-check.
+  // Now, once x reaches SEAL_X0, z snaps back inside bounds and the
+  // player runs straight into wall A at full size, off the slot.
+  await setPos(9, -27.3);
+  await page.waitForTimeout(120);
+  const run = await walk('ArrowUp', { untilX: x => x >= 30, maxMs: 8000 });
+  const s = await thinState();
+  const done = await thinDone();
+  console.log('south-flank repro: x=' + run.x.toFixed(2) + ' z=' + run.z.toFixed(2) + ' sealHits=' + s.sealHits + ' wallHits=' + s.wallHits + ' done=' + done);
+  if (run.x >= 12) errors.push('the south-flank repro was not blocked at wall A (reached x=' + run.x.toFixed(2) + ')');
+  if (s.sealHits <= 0) errors.push('the south-flank repro never registered a seal hit (sealHits=' + s.sealHits + ')');
+  if (s.wallHits <= 0) errors.push('the south-flank repro never hit a wall after being sealed back inside bounds (wallHits=' + s.wallHits + ')');
+  if (s.slotsPassed !== 0) errors.push('the south-flank repro advanced slotsPassed (' + s.slotsPassed + ')');
+  if (done) errors.push('the region finished via the south-flank repro');
+}
+
+// ---- item 3: a flat player misaligned with the slot must never be told
+// to flatten — the rails light and a ripple points toward the slot
+// instead. setPos(9,-17.2) sits inside column A's radius (centre 9,-16,
+// r=1.5) but off wall A's slot (|z-slotZ|=1.2 > half=.75). ----
+{
+  await setPos(9, -17.2);
+  await page.waitForTimeout(150);
+  const t0 = Date.now(); let flatNow = 0;
+  while (Date.now() - t0 < 4000) {
+    flatNow = await DA('flat');
+    if (flatNow >= .95) break;
+    await page.waitForTimeout(60);
+  }
+  console.log('item 3 setup: flat=' + flatNow.toFixed(2));
+  if (flatNow < .9) errors.push('column A did not flatten the player for the item 3 setup (flat=' + flatNow.toFixed(2) + ')');
+
+  await page.keyboard.down('ArrowUp');
+  let sawFlatten = false, sawHint = false;
+  const t1 = Date.now();
+  while (Date.now() - t1 < 12000) {
+    const promptTxt = await page.evaluate(() => document.getElementById('prompt').textContent);
+    if (promptTxt === 'Flatten first.') sawFlatten = true;
+    const s = await thinState();
+    if (s.walls[0].hintOn) sawHint = true;
+    if (!sawHint) await page.waitForTimeout(150); else await page.waitForTimeout(300);
+  }
+  await page.keyboard.up('ArrowUp');
+  await page.waitForTimeout(150);
+  console.log('item 3: sawFlatten=' + sawFlatten + ' sawHint=' + sawHint);
+  if (sawFlatten) errors.push('a flat, misaligned player was told to "Flatten first."');
+  if (!sawHint) errors.push('a flat, misaligned player stuck at the wall never got the rail/ripple hint (hintOn)');
+  await page.screenshot({ path: shotDir + 'thin-flat-misaligned-hint.png' });
+}
+
+// ---- item 5: the trench's containment is checked every frame, not only
+// on the frame a player crosses into it. Teleport straight inside the
+// gap's x-span at full size (off any column's reach) — even with zero
+// velocity, standing there must still fall. ----
+{
+  // neutral stop first — away from every column and wall — so any
+  // leftover flatness (item 3's wall-hint sustain keeps it elevated while
+  // parked at a wall) fully settles to 0 before the actual teleport,
+  // keeping this test unambiguous: full-size, then dropped into the gap.
+  await setPos(9, -25);
+  await page.waitForTimeout(500);
+  await setPos(24.7, -20); // inside GAP_NEAR(24.0)..GAP_FAR(25.4), off the corridor's z-line
+  await page.waitForTimeout(120);
+  const flatOnDrop = await DA('flat');
+  let fell = false;
+  const t0 = Date.now();
+  while (Date.now() - t0 < 2000) {
+    const s = await thinState();
+    if (s.fallActive) { fell = true; break; }
+    await page.waitForTimeout(50);
+  }
+  console.log('item 5: flat-on-teleport=' + flatOnDrop.toFixed(2) + ' fell=' + fell);
+  if (flatOnDrop > .3) errors.push('player was unexpectedly flat for the item 5 containment test (flat=' + flatOnDrop.toFixed(2) + ')');
+  if (!fell) errors.push('stopping full-size inside the gap span did not trigger a fall (containment is not checked every frame)');
+  await page.waitForTimeout(700); // let the fall resolve before moving on
 }
 
 // ---- the toy: walk into the first column (also the turn), squash flat
@@ -244,10 +410,22 @@ await page.keyboard.up('ArrowUp');
 await page.waitForTimeout(700); // let the 0.6s freeze finish and the reset land
 await logSample('after-reset');
 
-// step off-line toward column C (22,-18.6) — the column nearest the gap
-const nearC = await nudgeToward(22, -18.6, { thresh: .8, tol: .3, maxMs: 8000 });
+// item 4: the put-back point itself — column C (23.4,-18.4) should be
+// flaring right now, and on screen (it sits close in x to the put-back
+// lip at GAP_NEAR-.4 = 23.6).
+{
+  const s = await thinState(); const pos = await sample();
+  console.log('put-back point: pos=(' + pos.x.toFixed(2) + ',' + pos.z.toFixed(2) + ') colCFlareOn=' + s.colCFlareOn);
+  if (!s.colCFlareOn) errors.push('column C did not flare after the put-back (colCFlareOn=' + s.colCFlareOn + ')');
+  await page.screenshot({ path: shotDir + 'thin-put-back-column-c.png' });
+}
+
+// item 4's real check: a *straight* ArrowLeft (pure -z, no diagonal aim)
+// from the put-back lip must pass inside column C's radius on its own —
+// the old column (22,-18.6) needed a diagonal nudge to reach at all.
+const nearC = await holdUntilFlat('ArrowLeft', .8, 6000);
 await logSample('near-C');
-if (nearC.flat < .8) errors.push('column C did not flatten the player (flat=' + nearC.flat.toFixed(2) + ')');
+if (nearC.flat < .8) errors.push('a straight ArrowLeft from the put-back lip did not reach column C (flat=' + nearC.flat.toFixed(2) + ')');
 await page.waitForTimeout(350); // let the squash spring settle near 1 before running at it
 
 // run forward across the gap, off-line, while still flat — shoot the gap
@@ -274,11 +452,14 @@ if (!shotGapFlat) await page.screenshot({ path: shotDir + 'thin-04-gap-flat.png'
 
 // reorient onto the corridor's z-line, a few units short of the goal, and
 // shoot it there: earned (both slots, a real gap crossing) so the light is
-// lit and the beam is on, but not yet collected.
+// lit and the beam is on, but not yet collected. 26.0, not GOAL_X()-3
+// (24.6): the latter sits inside the gap's own x-span (24.0..25.4), and by
+// this point flat has likely decayed — landing there full-size would fall
+// in again (item 5), even though the crossing already happened.
 function GOAL_X() { return 27.6; }
 function CZ_Z() { return -16; }
 if (!st.goalReached) {
-  await nudgeToward(GOAL_X() - 3, CZ_Z(), { thresh: 999, tol: .4, maxMs: 8000 });
+  await nudgeToward(26.0, CZ_Z(), { thresh: 999, tol: .4, maxMs: 8000 });
   await logSample('short-of-goal');
   await page.waitForTimeout(200);
   await page.screenshot({ path: shotDir + 'thin-goal-lit.png' });
