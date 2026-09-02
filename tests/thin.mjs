@@ -48,7 +48,7 @@ await page.waitForTimeout(300);
 if ((await DA('region')) !== 'thin') errors.push('did not land in the thin region at its entrance');
 
 // ---- the toy: walk into the first column, squash flat with a visible overshoot ----
-let r = await walk('ArrowLeft', { untilZ: z => z <= -15.3, maxMs: 20000 }); // entrance -> past column A's centre
+let r = await walk('ArrowLeft', { untilZ: z => z <= -14.9, maxMs: 20000 }); // entrance -> just past column A's centre (coarse headless frames overshoot)
 console.log('column A: peak flat =', r.peak.toFixed(3), 'z=', r.z.toFixed(2));
 if (r.peak < 1.05) errors.push('no visible overshoot entering the column (peak=' + r.peak.toFixed(2) + ')');
 await page.waitForTimeout(250);

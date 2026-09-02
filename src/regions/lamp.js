@@ -201,8 +201,9 @@ const region=registerRegion({
   constrain(prevX,prevZ,pos,vel){
     if(this.swapLock) return;
     if(pos.x<this.bounds.x0-.5||pos.x>this.bounds.x1+.5) return;
-    if(pos.z>HOLE_Z0+.02&&pos.z<HOLE_Z1-.02){
-      const fromNear=prevZ<=HOLE_Z0+.02;
+    // the rim is solid too: nothing between the lips is walkable
+    if(pos.z>HOLE_Z0-.3&&pos.z<HOLE_Z1+.3){
+      const fromNear=prevZ<=(HOLE_Z0+HOLE_Z1)/2;
       if(fromNear){ pos.z=Math.min(pos.z,HOLE_Z0-.3); if(vel.z>0)vel.z*=-.2; }
       else{ pos.z=Math.max(pos.z,HOLE_Z1+.3); if(vel.z<0)vel.z*=-.2; }
       if(!this.blockedFlag){

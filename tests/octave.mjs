@@ -28,8 +28,12 @@ else{
   // 3. teleport: run into A head-on from 3 units away, come out of B
   await page.waitForTimeout(1000);
   // approach A along one axis (digital keys cannot aim diagonally), from the side facing away from B
-  const ax=Math.abs(A.x-B.x)>Math.abs(A.z-B.z)?'x':'z'; const sgn=ax==='x'?Math.sign(A.x-B.x)||1:Math.sign(A.z-B.z)||1;
-  let start=ax==='x'?[A.x+sgn*3.2,A.z]:[A.x,A.z+sgn*3.2]; start=[Math.max(-10.5,Math.min(-1,start[0])),Math.max(-7.5,Math.min(7.5,start[1]))];
+  // pick an axis and side whose start point stays on the page and clear of A (A may stand near an edge)
+  const cands=[['x',Math.sign(A.x-B.x)||1],['x',-(Math.sign(A.x-B.x)||1)],['z',Math.sign(A.z-B.z)||1],['z',-(Math.sign(A.z-B.z)||1)]];
+  let ax='x',start=null;
+  for(const [a,sg] of cands){ let st=a==='x'?[A.x+sg*3.2,A.z]:[A.x,A.z+sg*3.2]; st=[Math.max(-10.5,Math.min(-1,st[0])),Math.max(-7.5,Math.min(7.5,st[1]))];
+    if(Math.hypot(st[0]-A.x,st[1]-A.z)>=2.6){ax=a;start=st;break;} }
+  if(!start){ax='x';start=[A.x-3,A.z];}
   await driveTo(start[0],start[1]); await page.waitForTimeout(600);
   let p0=await DA('pos'); const dx=A.x-p0[0],dz=A.z-p0[2]; const ks=[]; if(ax==='x')ks.push(dx>0?'ArrowRight':'ArrowLeft'); else ks.push(dz>0?'ArrowDown':'ArrowUp');
   // hold the keys until the teleport fires or we have clearly run past A (state-driven: headless fps varies)

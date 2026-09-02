@@ -1060,6 +1060,7 @@ function nextRegion(){
 // ---------- save / continue ----------
 const SAVE_KEY='da.save.v1';
 export function saveGame(){
+  if(!crossed)return;                 // a fresh page must never overwrite a real save
   try{
     const d={crossed,seeds,awakened,roomFold:roomFoldTarget,pos:playerPos.toArray(),place:curRegion?curRegion.name:'THE FIELD',
       s2:{done:S2.done,round:S2.round,arrived:S2.arrived,active:S2.active},

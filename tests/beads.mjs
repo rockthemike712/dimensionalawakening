@@ -63,7 +63,7 @@ if (duringDrag.meanX <= beforeDrag.meanX + .1 || duringDrag.meanZ >= beforeDrag.
 await page.waitForTimeout(500);
 
 // a reed tap still rings while the drag handler is live
-const reed = pageReeds[0];
+const reed = pageReeds.find(l => l.x < -3) || pageReeds[0];   // clear of the seam's grab box
 const rp = await page.evaluate(([x, z]) => window.__DA.project(x, .3, z), [reed.x, reed.z]);
 const rings0 = await page.evaluate(() => window.__DA.rings);
 await page.mouse.click(rp.x, rp.y);
@@ -126,7 +126,7 @@ await page.screenshot({ path: SHOTS + '/4-beads-lit-dent.png' });
 // ---- save / load: a lit dent survives a reload through Continue ----
 await page.evaluate(() => { window.__DA.jump3d(); window.__DA.save(); });
 await page.waitForTimeout(300);
-const litBeforeReload = (await beadsState()).lit;
+const litBeforeReload = (await beadsState()).lit; console.log('saved beads:', await page.evaluate(() => JSON.stringify((window.__DA.loadSave()||{}).regions?.beads)));
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForTimeout(600);
 await page.evaluate(() => window.__DA.applySave(Object.assign(window.__DA.loadSave()||{}, {crossed:true})));   // Continue is only offered once crossed; force it here
