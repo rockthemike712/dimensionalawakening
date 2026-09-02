@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {registerRegion, world, playerPos, velocity, curRegion, renderer, camera,
         emitRipple, blip, slide, chime, pulseFlash, setPrompt, refreshHud, makeLight,
-        saveGame, ease, audio, S2} from '../game.js';
+        saveGame, ease, audio, S2, lookBack} from '../game.js';
 
 // ---------------------------------------------------------------------------
 // LOWER THE LAMP — the identity crack, the last rung of Act I. A slit cuts
@@ -12,27 +12,45 @@ import {registerRegion, world, playerPos, velocity, curRegion, renderer, camera,
 // of you, across the gap you cannot walk over. Close your eyes at the right
 // moment and you and your shadow trade places.
 // ---------------------------------------------------------------------------
-const LX=14, LZ=19;                 // the lamp's fixed footprint (near side, on the approach)
+// the lamp's fixed footprint sits just short of the rim — AHEAD of where the
+// player stands to work it, not behind — so its low, dragged-down silhouette
+// never grows tall enough on screen to sit over the pad (see LY_MIN below).
+const LX=15.8, LZ=19;
 const LY_MAX=4;                     // low enough that the core is on screen from the entrance
+// the lamp's lowest resting height: raised off the old ~.37 so that, at full
+// drag, the core's screen projection never sinks into the d-pad's band at
+// the bottom of the phone. Tuned against a 390x844 shot (see item 4).
+const LY_MIN=1.3;
 const CENTER_H=.26;                 // the player's centre height, once fully 3D
 const HOLE_X0=17, HOLE_X1=22;       // the slit spans the region's full z range
 const FAR_LIGHT=new THREE.Vector3(25,0,19);
 const LAMP_COLOR=0xffcf6b, SHADOW_COLOR=0x58f5ff;
 const LAMP_COLOR_C=new THREE.Color(LAMP_COLOR), SHADOW_COLOR_C=new THREE.Color(SHADOW_COLOR);
 
-// the drag→shadow mapping: s never explodes. u is drag distance in [0,1];
-// s rises linearly from 1 (shadow at your feet) to S_MAX (shadow thrown its
-// furthest). S_MAX is picked so that, dragged fully while standing at the
-// near lip, the shadow lands at most 1.5 units past the far lip.
-const S_MAX=3.45;
-const LY_MIN=CENTER_H*S_MAX/(S_MAX-1);   // the lamp's lowest resting height (~.37)
+// the drag -> shadow mapping. u (drag distance, 0..1) drives lampY linearly;
+// s (how far the shadow is thrown) is then read off the lamp's actual height
+// with the real projection geometry: a point light at height Y throws a
+// shadow of a thing at height CENTER_H out to s = Y/(Y-CENTER_H) times its
+// distance from the light. That alone would need the lamp within inches of
+// CENTER_H to throw the shadow across the slit — but LY_MIN was raised (see
+// above) to keep the lamp off the pad, which shortens the lamp-to-player
+// baseline and starves the pure-geometry throw. S_BOOST is a small, honest
+// fudge on top of the geometry, ramped in only over the last part of the
+// drag (u^3), so most of the pull still reads as "real" projection and only
+// the final push earns the extra reach needed to clear the far lip.
+const S_BOOST=6.7;
 const DRAG_FULL_PX=46;                   // ~40px of drag: near lip to across
-const SWAP_MARGIN=.15;                   // how far past the far lip counts as "across"
+const SWAP_MARGIN=.32;                   // how far past the far lip counts as "across" —
+                                          // must clear the constrain block's own +.3 band
 
 const raycaster=new THREE.Raycaster(), ndc=new THREE.Vector2();
 const eyeBtnEl=()=>document.getElementById('eye');
 const veilEl=()=>document.getElementById('veil');
 const freqForU=u=>THREE.MathUtils.mapLinear(u,0,1,520,150);
+// fade to 0 over the last .5 units past a bound rather than pinning a decal
+// at the wall (item 9); hoisted so update() never allocates a closure
+const fadeAxis=(raw,lo,hi)=>raw<lo?THREE.MathUtils.clamp(1-(lo-raw)/.5,0,1):
+                              raw>hi?THREE.MathUtils.clamp(1-(raw-hi)/.5,0,1):1;
 
 // a soft radial-falloff shadow, made once (no per-frame allocation)
 function makeShadowTexture(){
@@ -49,16 +67,20 @@ const SHADOW_TEX=makeShadowTexture();
 const region=registerRegion({
   id:'lamp', name:'THE LAMP', color:LAMP_COLOR,
   bounds:{x0:4,x1:26,z0:11,z1:27},
-  entrance:new THREE.Vector3(9,0,12.5),
+  // dead ahead of the entrance and lined up with the slit, so the lamp is in
+  // frame the moment the player arrives (see item 1)
+  entrance:new THREE.Vector3(8,0,19),
 
   // ---- state ----
   dragU:0, lampY:LY_MAX, lampTouched:false,
   dragging:false, dragStartClientY:0, dragStartU:0, lastHumU:0,
   shadowVisible:false, shadowPos:new THREE.Vector3(), lastRippleShadow:new THREE.Vector3(9999,0,9999),
+  shadowFade:1,
   _redT:-99, _rimFlashNearT:-99, _rimFlashFarT:-99, _nextAttempt:0,
   swapped:false, finished:false,
-  eyeHoldT:0,
+  eyeHoldT:0, _holdRefused:false, veilDipT:-99, _veilCur:0,
   swapLock:false, swapT0:0, footIdx:-1, oldPos:new THREE.Vector3(), targetPos:new THREE.Vector3(),
+  lookBackT:-99, echoShown:false,
   rimIdleT:0, eyeIdleT:0, promptKind:null,
   stepAccum:0, blockedFlag:false, _railFlag:false,
 
@@ -76,11 +98,15 @@ const region=registerRegion({
     near.position.set(HOLE_X0,.05,(b.z0+b.z1)/2); world.add(near);
     const far=new THREE.Mesh(new THREE.BoxGeometry(.16,.06,b.z1-b.z0),rimMat.clone());
     far.position.set(HOLE_X1,.05,(b.z0+b.z1)/2); world.add(far);
+    // the rails run from just short of the near lip all the way to the
+    // region's east edge — the whole stretch where the slit could otherwise
+    // be walked around (item 6), not just the hole's own narrow width
     const railMat=new THREE.MeshBasicMaterial({color:0xfff2c8,transparent:true,opacity:.8,blending:THREE.AdditiveBlending});
-    const railN=new THREE.Mesh(new THREE.BoxGeometry(HOLE_X1-HOLE_X0+.3,.3,.14),railMat.clone());
-    railN.position.set((HOLE_X0+HOLE_X1)/2,.16,b.z0); world.add(railN);
-    const railS=new THREE.Mesh(new THREE.BoxGeometry(HOLE_X1-HOLE_X0+.3,.3,.14),railMat.clone());
-    railS.position.set((HOLE_X0+HOLE_X1)/2,.16,b.z1); world.add(railS);
+    const railX0=HOLE_X0-.5, railW=b.x1-railX0, railCX=(railX0+b.x1)/2;
+    const railN=new THREE.Mesh(new THREE.BoxGeometry(railW,.3,.14),railMat.clone());
+    railN.position.set(railCX,.16,b.z0); world.add(railN);
+    const railS=new THREE.Mesh(new THREE.BoxGeometry(railW,.3,.14),railMat.clone());
+    railS.position.set(railCX,.16,b.z1); world.add(railS);
 
     // the lamp: an octahedron core, breathing, on a vertical line of light
     // that pulses slowly downward — "pull me" without a word
@@ -99,6 +125,7 @@ const region=registerRegion({
     });
     const beam=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,BEAM_LEN,10),beamMat);
     beam.position.set(LX,BEAM_LEN/2,LZ); world.add(beam);
+    beam.userData.baseLen=BEAM_LEN;   // rescaled every frame to run sky -> core (item 5)
     const core=new THREE.Mesh(new THREE.OctahedronGeometry(.32,0),
       new THREE.MeshStandardMaterial({color:0xffffff,emissive:LAMP_COLOR,emissiveIntensity:4,roughness:.12}));
     core.scale.setScalar(1.4);
@@ -135,11 +162,18 @@ const region=registerRegion({
     oldRing.rotation.x=-Math.PI/2; oldRing.position.y=.03;
     const oldSelf=new THREE.Group(); oldSelf.add(oldDisc,oldCore,oldRing); oldSelf.visible=false; world.add(oldSelf);
 
+    // the lingering question: a second, dimmer copy ahead on the far side,
+    // seen only for a couple of seconds once the look-back has returned —
+    // it fades on its own, never explained (item 8)
+    const farEcho=new THREE.Mesh(new THREE.CircleGeometry(.42,28),
+      new THREE.MeshBasicMaterial({color:0xeaffff,transparent:true,opacity:0,depthWrite:false}));
+    farEcho.rotation.x=-Math.PI/2; farEcho.position.y=.02; farEcho.visible=false; world.add(farEcho);
+
     // beyond the slit: the goal
     const farLight=makeLight(FAR_LIGHT,LAMP_COLOR);
 
-    Object.assign(this,{lampGroup,core,ring,halo,glow,grab,beamMat,shadowGroup,shadowMat,rim,
-      edgeNearMat:near.material,edgeFarMat:far.material,oldSelf,far:farLight});
+    Object.assign(this,{lampGroup,core,ring,halo,glow,grab,beam,beamMat,shadowGroup,shadowMat,rim,
+      edgeNearMat:near.material,edgeFarMat:far.material,oldSelf,farEcho,far:farLight});
   },
 
   onEnter(first){
@@ -149,7 +183,8 @@ const region=registerRegion({
   onLeave(){
     eyeBtnEl().style.display='none';   // the room's own onEnter re-shows it there
     if(this.promptKind){setPrompt('');this.promptKind=null;}
-    this.rimIdleT=0; this.eyeIdleT=0; this.eyeHoldT=0; this._nextAttempt=0;
+    this.rimIdleT=0; this.eyeIdleT=0; this.eyeHoldT=0; this._nextAttempt=0; this._holdRefused=false;
+    veilEl().style.opacity=S2.eyes?'.87':'0';   // hand the veil back to the eye button's own control
   },
 
   attemptSwap(t){
@@ -169,10 +204,10 @@ const region=registerRegion({
       this.oldSelf.visible=true;
     }else{
       blip(95,.16,.09,'sine'); this._redT=t;
-      // flash the rim nearest wherever the shadow actually sits
+      // flash the near lip: the shadow, held over the hole, hasn't crossed
       if(this.shadowPos.x<=HOLE_X1) this._rimFlashNearT=t; else this._rimFlashFarT=t;
-      veilEl().style.opacity='.25';
-      setTimeout(()=>{ if(!this.swapLock) veilEl().style.opacity=S2.eyes?'.87':'0'; },300);
+      // one veil dip per refusal, not per .4s retry — see update()'s decay
+      if(!this._holdRefused){ this._holdRefused=true; this.veilDipT=t; }
     }
   },
 
@@ -185,15 +220,32 @@ const region=registerRegion({
     if(!this.lampGroup) return;
     const insideMe=curRegion===this, b=this.bounds;
 
-    // ---- the lamp: driven by the drag, never by an exploding formula ----
-    const s=1+this.dragU*(S_MAX-1);
-    this.lampY=this.dragU<1e-4?LY_MAX:THREE.MathUtils.clamp(CENTER_H*s/(s-1),LY_MIN,LY_MAX);
+    // ---- the lamp: lampY driven linearly by the drag; s (the throw) read
+    // off the real geometry, plus the documented boost at the top of the
+    // pull (see S_BOOST above) ----
+    const u=this.dragU;
+    this.lampY=u<1e-4?LY_MAX:THREE.MathUtils.lerp(LY_MAX,LY_MIN,u);
+    const sGeom=this.lampY/(this.lampY-CENTER_H);
+    const boost=THREE.MathUtils.lerp(1,S_BOOST,u*u*u);
+    const s=sGeom*boost;
     this.lampGroup.position.set(LX,this.lampY,LZ);
     this.lampGroup.rotation.y=t*.6; this.ring.rotation.z=t*.35;
     this.halo.scale.setScalar(1+.22*Math.sin(t*1.3));
     this.halo.material.opacity=.14+.10*(.5+.5*Math.sin(t*1.3));
     this.beamMat.uniforms.uTime.value=t;
-    if(this.far){ this.far.rotation.y=t*.5; this.far.position.y=.5+.1*Math.sin(t*2.1); }
+    // the beam runs from a fixed point in the sky down to wherever the core
+    // now sits — it follows the lamp instead of staying stretched full-length
+    // (item 5)
+    if(this.beam){
+      const top=LY_MAX+2, len=Math.max(.05,top-this.lampY);
+      this.beam.scale.y=len/this.beam.userData.baseLen;
+      this.beam.position.set(LX,this.lampY+len/2,LZ);
+    }
+    if(this.far){
+      this.far.rotation.y=t*.5; this.far.position.y=.5+.1*Math.sin(t*2.1);
+      const fu=this.far.userData;
+      if(fu){ fu.beam.visible=!this.finished; fu.glow.visible=!this.finished; }   // item 10: dims, never fully out
+    }
     this.edgeNearMat.color.setHex(t-this._rimFlashNearT<.2?0xff3050:0xfff2c8);
     this.edgeFarMat.color.setHex(t-this._rimFlashFarT<.2?0xff3050:0xfff2c8);
 
@@ -203,23 +255,27 @@ const region=registerRegion({
       refreshHud(); saveGame();
     }
 
-    // ---- the shadow: S = L + s(P - L), s driven by the drag, clamped to the ledge ----
-    // frozen once the swap has begun: the target was already captured at that instant
+    // ---- the shadow: projected along x only, so the whole near rim works
+    // the same way (item 2) — z simply follows the player, never lerped
+    // toward the lamp's own z. Frozen once the swap has begun: the target
+    // was already captured at that instant.
     if(!this.swapped&&!this.swapLock){
-      const rawX=LX+s*(playerPos.x-LX), rawZ=LZ+s*(playerPos.z-LZ);
+      const rawX=LX+s*(playerPos.x-LX), rawZ=playerPos.z;
       this.shadowPos.set(THREE.MathUtils.clamp(rawX,b.x0,b.x1),0,THREE.MathUtils.clamp(rawZ,b.z0,b.z1));
       this.shadowVisible=true;
+      this.shadowFade=Math.min(fadeAxis(rawX,b.x0,b.x1),fadeAxis(rawZ,b.z0,b.z1));
     }
     this.shadowGroup.visible=this.shadowVisible&&!this.swapped&&!this.swapLock&&insideMe;
     if(this.shadowGroup.visible){
       this.shadowGroup.position.set(this.shadowPos.x,.05,this.shadowPos.z);
       const stretch=THREE.MathUtils.clamp(1+(s-1)*.05,.9,1.7);
       this.shadowGroup.scale.setScalar(stretch);
+      this.shadowMat.opacity=this.shadowFade;
       const prox=1-THREE.MathUtils.clamp(Math.abs(this.shadowPos.x-HOLE_X1)/6,0,1);
       const red=t-this._redT<.2;
       this.shadowMat.color.setHex(red?0xff3050:0xffffff);
       this.rim.material.color.setHex(red?0xff3050:SHADOW_COLOR);
-      this.rim.material.opacity=red?.8:.35+.55*prox;
+      this.rim.material.opacity=(red?.8:.35+.55*prox)*this.shadowFade;
     }
 
     // ---- ripples while scrubbing: the world's language, sound off or on ----
@@ -248,8 +304,20 @@ const region=registerRegion({
       if(S2.eyes){
         this.eyeHoldT+=dt;
         if(this.eyeHoldT>=.5&&t>=this._nextAttempt){ this._nextAttempt=t+.4; this.attemptSwap(t); }
-      }else{ this.eyeHoldT=0; this._nextAttempt=0; }
+      }else{ this.eyeHoldT=0; this._nextAttempt=0; this._holdRefused=false; }
     }
+
+    // ---- the veil: one continuous, decaying value out of update(), never a
+    // setTimeout shorter than the CSS transition (item 7). A refusal dips it
+    // once (see attemptSwap) and it eases back to whatever the eye button
+    // itself wants (.87 held, 0 released) — holding through repeated .4s
+    // retries never re-dips.
+    if(insideMe&&!this.swapLock){
+      const base=S2.eyes?.87:0;
+      const dipAge=t-this.veilDipT, dip=(dipAge>=0&&dipAge<.6)?(1-dipAge/.6)*.6:0;
+      veilEl().style.opacity=String(Math.max(0,base-dip));
+    }
+
     if(this.swapLock){
       velocity.set(0,0,0);
       const dt2=t-this.swapT0;
@@ -275,7 +343,28 @@ const region=registerRegion({
         emitRipple(this.targetPos.x,this.targetPos.z,1.5,LAMP_COLOR_C);
         emitRipple(this.oldPos.x,this.oldPos.z,1.2,SHADOW_COLOR_C);
         if(this.promptKind){setPrompt('');this.promptKind=null;}
+        // the old self is never otherwise seen: the camera glances back at it
+        // for a beat before returning to face forward (item 8)
+        lookBack(1.4); this.lookBackT=t; this.echoShown=false;
         refreshHud(); saveGame();
+      }
+    }
+
+    // ---- item 8, continued: once the look-back has returned, a second,
+    // dimmer copy lingers ahead on the far side for two seconds, then fades
+    // for good — the question outlives the glance back ----
+    if(this.lookBackT>0){
+      const el=t-this.lookBackT;
+      if(el>=1.4&&el<3.4){
+        if(!this.echoShown){
+          this.echoShown=true;
+          const ex=THREE.MathUtils.clamp(this.targetPos.x+3,b.x0+.6,b.x1-.6);
+          this.farEcho.position.set(ex,.02,this.targetPos.z);
+          this.farEcho.visible=true;
+        }
+        this.farEcho.material.opacity=.3*(1-(el-1.4)/2);
+      }else if(el>=3.4){
+        this.farEcho.visible=false; this.lookBackT=-99;
       }
     }
 
@@ -294,11 +383,15 @@ const region=registerRegion({
   constrain(prevX,prevZ,pos,vel){
     if(this.swapLock) return;
     const b=this.bounds;
-    // ends at the bounds exactly: outside this rectangle the lamp owns nothing
-    if(pos.x<b.x0||pos.x>b.x1||pos.z<b.z0-.8||pos.z>b.z1+.8) return;
+    // ends at x bounds exactly: outside this slice the lamp owns nothing.
+    // the z margin is generous (well past the ledge's own z0..z1) so a
+    // player who strays north/south near the slit's x-range is still caught
+    // by the fence below instead of slipping past it uncontrained (item 6).
+    if(pos.x<b.x0||pos.x>b.x1||pos.z<b.z0-2.5||pos.z>b.z1+2.5) return;
 
-    // the slit: solid across the ledge's full width; nothing between the lips is walkable
-    if(pos.x>HOLE_X0-.3&&pos.x<HOLE_X1+.3){
+    // the slit: solid across the ledge's own z-range; nothing between the
+    // lips is walkable
+    if(pos.x>HOLE_X0-.3&&pos.x<HOLE_X1+.3&&pos.z>b.z0-.3&&pos.z<b.z1+.3){
       const fromNear=prevX<=(HOLE_X0+HOLE_X1)/2;
       if(fromNear){ pos.x=Math.min(pos.x,HOLE_X0-.3); if(vel.x>0)vel.x*=-.2; }
       else{ pos.x=Math.max(pos.x,HOLE_X1+.3); if(vel.x<0)vel.x*=-.2; }
@@ -308,12 +401,20 @@ const region=registerRegion({
       }
     }else this.blockedFlag=false;
 
-    // the slit's two ends are fenced (the rail): it cannot be walked around
-    if(pos.x>HOLE_X0-.5&&pos.x<HOLE_X1+.5){
+    // the fence: past the near lip's threshold the region's z edges are
+    // walls for the rest of the ledge — near rim through the far light — so
+    // the slit cannot be walked around at any point along that stretch,
+    // not just where the hole itself sits (item 6)
+    if(pos.x>HOLE_X0-.5){
       if(pos.z<b.z0+.3){ pos.z=Math.max(pos.z,b.z0+.3); if(vel.z<0)vel.z*=-.2; this._railBump('n',b.z0+.3); }
       else if(pos.z>b.z1-.3){ pos.z=Math.min(pos.z,b.z1-.3); if(vel.z>0)vel.z*=-.2; this._railBump('s',b.z1-.3); }
       else this._railFlag=false;
     }else this._railFlag=false;
+
+    // a hard safety clamp on top of the bounce above: whatever put the
+    // player here (a fast frame, a reed nudge), z is pinned once x is past
+    // the fence line
+    if(pos.x>16.5) pos.z=THREE.MathUtils.clamp(pos.z,11.3,26.7);
   },
 
   done(){ return this.finished; },
@@ -321,9 +422,13 @@ const region=registerRegion({
     return {lampY:+this.lampY.toFixed(2), dragU:+this.dragU.toFixed(3),
       shadowX:+this.shadowPos.x.toFixed(2), shadowZ:+this.shadowPos.z.toFixed(2),
       shadowVisible:this.shadowGroup?this.shadowGroup.visible:false,
+      shadowFade:+this.shadowFade.toFixed(2),
       swapped:this.swapped, finished:this.finished, swapLock:this.swapLock,
       oldX:+this.oldPos.x.toFixed(2), oldZ:+this.oldPos.z.toFixed(2),
-      oldSelfVisible:this.oldSelf?this.oldSelf.visible:false};
+      oldSelfVisible:this.oldSelf?this.oldSelf.visible:false,
+      echoVisible:this.farEcho?this.farEcho.visible:false,
+      farBeamOn:this.far?this.far.userData.beam.visible:null,
+      farGlowOn:this.far?this.far.userData.glow.visible:null};
   },
   save(){ return {dragU:this.dragU, swapped:this.swapped, finished:this.finished,
     oldPos:this.swapped?[this.oldPos.x,this.oldPos.z]:null}; },
