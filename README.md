@@ -36,6 +36,7 @@ browsers since the only dependency is Three.js from a CDN.)
 
 **Controls:** WASD / arrow keys, or the on-screen pad (tap for a step, hold to
 keep moving). After the first seed, drag the glowing cyan seam to fold space.
+Walk through the pillars, or tap one, to ring it.
 
 ## The V7 vertical slice
 
@@ -93,6 +94,15 @@ intuitive on both sides of the crossing).
 - [x] **V7: the dimensional shift.** Crossing the fold is the birth of depth
       (2D → 3D); stage 2 lives in the 3D room with the pattern painted on a
       big screen you face
+- [x] **Octave: the marks are reeds.** Every pillar is an overtone of one
+      string (heights 2.4 1.6 1.2 .8 .6 .4 = A E A E A E). Walk through one or
+      tap it: it sways, rings, and sends a ripple in its own colour across the
+      sheet. Tall sounds low, short sounds high, same colour is the same note.
+      Ring two of the same colour at different heights within a second and they
+      flash white, a thread snaps taut between them, and they are one pillar:
+      walk into either and you come out of the other, mid-stride. Ring two
+      different colours instead and a new, shorter reed grows between them. No
+      goal, no words; it is a toy that later becomes a second kind of "near"
 - [ ] The subtle impossibility: a reflection somewhere it shouldn't be
 - [x] **A second edge that composes with the first.** After the third pattern a
       new edge appears across the room; pull it and the far end (screen
