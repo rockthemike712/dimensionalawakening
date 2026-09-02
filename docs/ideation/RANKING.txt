@@ -1,0 +1,28 @@
+rank  id  avg/40    1-feel    2-math  3-produc  title
+   1  D2    31.3        31        33        30  The Corner Comes to You
+   2  E3    31.0        35        32        26  Thin
+   3  E2    31.0        31        34        28  Octave
+   4  B1    29.7        31        28        30  Lower the Lamp
+   5  E5    29.3        30        30        28  Beads
+   6  D4    26.3        23        26        30  The Flat Places
+   7  D3    26.3        27        31        21  Turning the Door
+   8  C3    26.0        25        30        23  Where the Wobble Stops
+   9  C1    26.0        27        30        21  Knock
+  10  B5    25.3        32        24        20  Blink and Keep It
+  11  A3    25.3        30        20        26  The Doubling Door
+  12  D5    25.0        27        27        21  The Rising Cut
+  13  E1    24.7        29        24        21  Corners
+  14  C4    24.3        32        16        25  Tune
+  15  C2    24.0        25        29        18  Shut
+  16  A1    24.0        25        29        18  The Short Way Around
+  17  D1    23.3        27        24        19  The Second Point
+  18  B2    22.0        25        17        24  The Second Shadow
+  19  B4    20.3        16        24        21  One Right Place
+  20  A5    19.0        25        16        16  The Room in the Stone
+  21  A4    18.3        16        24        15  Left Comes Back Right
+  22  C5    17.0        16        19        16  Eight Steps
+  23  B3    17.0        16        15        20  Built Behind Your Back
+  24  E4    16.0        17        16        15  Two Turns
+  25  A2    15.7        16        16        15  What You Watch Backs Away
+
+critics counted: ['1-feel', '2-math', '3-producer'] | ideas scored: 25
