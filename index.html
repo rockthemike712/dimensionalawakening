@@ -373,7 +373,7 @@ const S2={
 };
 const S2_EMIT=new THREE.Vector3(3.0,0,0), S2_BARX=6.6, S2_SCRX=10.8;
 const S2_GAPZ=1.6, S2_GAPHW=.9, S2_BAND=1.7, S2_K=Math.PI/3.4, S2_WATCH_R=4.6;
-const S2_SEAM2X=8.6, S2_NR=5, SQF=.45;   // the second edge; five patterns; squeeze when fully pulled
+const S2_SEAM2X=8.6, S2_NR=4, SQF=.45;   // the second edge; five patterns; squeeze when fully pulled
 let roomFold=0, roomFoldTarget=0, dragging2=false, drag2StartY=0, drag2Start=0;
 const sq=()=>1-(1-SQF)*roomFold;        // pulling the far end closer squeezes the picture
 function roomFoldPoint(v){
@@ -396,11 +396,8 @@ const S2_ROUNDS=[
    intro:'One more.',
    hint:'Stand in the opening.'},
   {profile:z=>Math.pow(Math.cos(S2_K*z/SQF),2)*Math.exp(-(z/SQF)*(z/SQF)/20.5),
-   intro:'Now this shape.',
-   hint:'Pull the new edge. Then stand on the far marker.'},
-  {profile:z=>gpdf(z/SQF,S2_BAND,.5)+gpdf(z/SQF,-S2_BAND,.5),
    intro:'Last one.',
-   hint:'Keep the edge pulled. Stand on the marker. Watch.'}
+   hint:()=>roomFold<.5?'Pull the new edge.':'Stand on the far marker. Or close your eyes.'}
 ];
 function gauss(mu,sig){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();
   return mu+sig*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
@@ -412,7 +409,7 @@ function sampleFringe(){
   return 0;
 }
 function s2Spot(){
-  const kind=['watch','far','gap','far','watch'][S2.round];
+  const kind=['watch','far','gap','far'][S2.round];
   if(kind==='watch')return new THREE.Vector3(5.2,0,0);
   if(kind==='far')return new THREE.Vector3(2.3,0,playerPos.z>=0?5.4:-5.4);
   return new THREE.Vector3(S2_BARX,0,playerPos.z>=0?S2_GAPZ:-S2_GAPZ);
@@ -666,7 +663,7 @@ function updateStage2(dt,t){
   S2.hold=S2.match>S2_THRESH?S2.hold+dt:Math.max(0,S2.hold-dt*1.5);
   if(S2.hold>0&&S2.match>S2_THRESH){S2.toneT-=dt;if(S2.toneT<=0){S2.toneT=.26;blip(440+560*Math.min(1,S2.hold/S2_HOLD),.1,.05,'triangle');}}
   if(S2.hold>=S2_HOLD)s2RoundDone();
-  if(S2.arrived&&!S2.hinted&&t-S2.roundT>8&&S2.hold/S2_HOLD<.3){S2.hinted=true;setPrompt(S2_ROUNDS[S2.round].hint);}
+  if(S2.arrived&&!S2.hinted&&t-S2.roundT>8&&S2.hold/S2_HOLD<.3){S2.hinted=true;const h=S2_ROUNDS[S2.round].hint;setPrompt(typeof h==='function'?h():h);}
 }
 function setEyes(c){
   S2.eyes=c;veil.style.opacity=c?.87:0;eyeBtn.classList.toggle('held',c);
@@ -830,8 +827,10 @@ renderer.domElement.addEventListener('pointermove',e=>{
   if(foldTarget>FOLD_OPEN)setPrompt('Walk into the edge.');
 });
 const endDrag=e=>{
-  if(dragging2){dragging2=false;const latch=roomFoldTarget>.5?1:0;
-    if(latch!==(drag2Start>.5?1:0))blip(latch?660:330,.35,.1,'sine');
+  if(dragging2){dragging2=false;
+    const moved=Math.abs(e.clientY-drag2StartY)>14;
+    const latch=moved?(roomFoldTarget>.5?1:0):(drag2Start>.5?0:1);   // tap = toggle
+    if(latch!==(drag2Start>.5?1:0)){blip(latch?660:330,.35,.1,'sine');for(let z=-6;z<=6;z+=3)emitRipple(S2_SEAM2X,z,.8);}
     roomFoldTarget=latch;try{renderer.domElement.releasePointerCapture(e.pointerId)}catch(_){}}
   if(dragging){dragging=false;try{renderer.domElement.releasePointerCapture(e.pointerId)}catch(_){}}};
 renderer.domElement.addEventListener('pointerup',endDrag);
@@ -875,7 +874,14 @@ function animate(){
  roomFold+=(roomFoldTarget-roomFold)*(1-Math.pow(.0005,dt));
  planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;planeMat.uniforms.uFold2.value=roomFold;planeMat.uniforms.uDim.value=dim;
  if(S2.far)S2.far.rotation.z=roomFold*.62;
- if(S2.seam2&&S2.seam2.visible){S2.seam2.material.opacity=.62+.3*Math.sin(t*3.1);S2.seam2Halo.material.opacity=.09+.06*Math.sin(t*2.2);}
+ if(S2.seam2&&S2.seam2.visible){
+   const on=roomFoldTarget>.5;
+   S2.seam2.material.color.setHex(on?0xffffff:0x60f7ff);
+   S2.seam2.material.opacity=on?.95:.62+.3*Math.sin(t*3.1);
+   S2.seam2Halo.material.opacity=on?.28:.09+.06*Math.sin(t*2.2);
+   if(on!==S2.pulledPrev){S2.pulledPrev=on;
+     if(on&&S2.active&&S2.done<S2_NR&&S2.round===3)setPrompt('Now stand on the far marker.');}
+ }
  seamMat.opacity=.62+.3*Math.sin(t*3.1);
  seamHalo.material.opacity=.09+.06*Math.sin(t*2.2);
  seamWall.material.opacity=.16*dim;
