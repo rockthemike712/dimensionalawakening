@@ -882,7 +882,7 @@ function updatePlayer(dt,t){
  if(here!==curRegion){
    if(curRegion&&curRegion.onLeave)curRegion.onLeave();
    curRegion=here; if(!here&&crossed)saveGame();
-   if(here){const first=!here.visited;here.visited=true;if(t-dimT>2.5)arrive(here,first);if(here.onEnter)here.onEnter(first);saveGame();}
+   if(here){const first=!here.visited;here.visited=true;if(t-dimT>2.5)arrive(here,first);if(promptEl.textContent==='Follow the lights.')setPrompt('');if(here.onEnter)here.onEnter(first);saveGame();}
    else if(crossed){dimLabel.textContent='3D';}
    refreshHud();
  }
@@ -1068,7 +1068,7 @@ function animate(){
  if(!crossed&&ct>=0)arrowTo=foldedPoint(seedData[ct].p);
  else if(S2.active&&S2.riseT===undefined&&!S2.arrived)arrowTo=S2.center.clone();
  else if(S2.active&&S2.done<S2_NR&&S2.round===3&&roomFold<.5&&curRegion&&curRegion.id==='room')arrowTo=new THREE.Vector3(S2_SEAM2X,1.6,playerPos.z*.4);
- else if(digested()&&!(S2.active&&inRoom()&&S2.done<S2_NR)){
+ else if(digested()&&!(S2.active&&inRoom()&&S2.done<S2_NR)&&!(curRegion&&ACT1.includes(curRegion.id)&&!(curRegion.done&&curRegion.done()))){
    const next=nextRegion(); if(next&&next!==curRegion)arrowTo=next.entrance?next.entrance.clone():S2.center.clone();
  }
  if(arrowTo){
