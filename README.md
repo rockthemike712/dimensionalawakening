@@ -17,7 +17,11 @@ lives in [`docs/HANDOFF.md`](docs/HANDOFF.md).
 
 | File | Purpose |
 |---|---|
-| [`index.html`](index.html) | **V7** — the current playable vertical slice: 2D sheet → fold → birth of depth → 3D room (Three.js, single file, no build step) |
+| [`index.html`](index.html) | The game shell (markup, CSS, import map). No build step |
+| [`src/game.js`](src/game.js) | The core: sheet, fold, birth of depth, the room, reeds, save/continue, the region registry |
+| [`src/regions/`](src/regions/) | Every other place in the universe, one file each. See [`docs/WORLD.md`](docs/WORLD.md) for the contract |
+| [`tests/`](tests/) | Headless Playwright suite: `bash tests/run.sh` (add `PORT=8905` to run beside another checkout) |
+| [`tools/bundle.py`](tools/bundle.py) | Builds the single-file artifact with esbuild (`python3 tools/bundle.py out.html`) |
 | [`test0.html`](test0.html) | **Test 0** — minimal input diagnostic with no Three.js. Open this first on a phone to prove tap input works before debugging anything else |
 | [`docs/HANDOFF.md`](docs/HANDOFF.md) | Complete design/concept handoff document |
 | [`docs/prototype-v5-archive.html`](docs/prototype-v5-archive.html) | Archived V5 prototype (pre-fix, kept for reference) |
@@ -31,8 +35,10 @@ every push to `main` deploys automatically:
 - `https://<user>.github.io/dimensionalawakening/` — the game
 
 Local: `python3 -m http.server 8000` in the repo root, then open
-`http://localhost:8000`. (A plain `file://` open also works in most desktop
-browsers since the only dependency is Three.js from a CDN.)
+`http://localhost:8000`. (ES modules need a server; `file://` will not load.)
+
+Progress is saved at every checkpoint. Reloading offers **Continue** (back in
+3D, the room where you left it) or **Start over**.
 
 **Controls:** WASD / arrow keys, or the on-screen pad (tap for a step, hold to
 keep moving). After the first seed, drag the glowing cyan seam to fold space.
@@ -110,5 +116,10 @@ intuitive on both sides of the crossing).
       squeezes: one more pattern (narrow stripes) can only be painted with the
       edge pulled; a tap on the edge toggles it. Fold space to change what the
       lights do
-- [ ] Then — and only then — TypeScript/Vite project structure, more
-      dimensions, shaders, procedural worlds
+- [x] **The universe.** The sheet is 80×56; the room is one region of it
+      and you can walk around it; reeds fill the field; every region has an
+      entrance light and the arrow points to the nearest one you have not
+      visited; progress is saved and Continue skips the replay
+- [ ] Regions in flight: Thin (north), The Corner Comes to You (east), Lower
+      the Lamp (south), Beads (the 2D page) — see `docs/briefs/`
+- [ ] Then: more dimensions, procedural worlds

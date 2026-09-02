@@ -808,7 +808,8 @@ function updatePlayer(dt,t){
  if(here!==curRegion){
    if(curRegion&&curRegion.onLeave)curRegion.onLeave();
    curRegion=here;
-   if(here){const first=!here.visited;here.visited=true;if(here.onEnter)here.onEnter(first);saveGame();}
+   if(here){const first=!here.visited;here.visited=true;arrive(here,first);if(here.onEnter)here.onEnter(first);saveGame();}
+   else if(crossed){dimLabel.textContent='3D';}
    refreshHud();
  }
  brushLandmarks(dt,t);
@@ -1041,6 +1042,17 @@ function offerResume(){
     audio(); if(cont){applySave(d);pulseFlash();depthChord();}else{clearSave();} };
   document.getElementById('resumeYes').onclick=()=>go(true);
   document.getElementById('resumeNo').onclick=()=>go(false);
+}
+
+// arriving somewhere: the place says its name the way the title did, the
+// ground answers, and a chord in the region's own key (first time only)
+function arrive(r,first){
+  if(!crossed)return;
+  dimLabel.textContent='3D \u00b7 '+r.name; dimLabel.style.letterSpacing='.6em';
+  setTimeout(()=>dimLabel.style.letterSpacing='.3em',900);
+  if(!first)return;
+  const e=r.entrance||playerPos; for(let k=0;k<3;k++)setTimeout(()=>emitRipple(e.x,e.z,1.1),k*160);
+  const base=r.key||220; [1,1.5,2].forEach((m,i)=>setTimeout(()=>blip(base*m,.9,.06,'sine'),i*110));
 }
 
 // ---------- hold buttons for regions (the eye is the model) ----------
