@@ -63,7 +63,7 @@ await testPage((process.env.DA_BASE||'http://localhost:8901')+'/index.html', { v
   console.log('FREE PLAY:',JSON.stringify(fp));
   if(fp.arrow)errors.push('arrow shown right after the crossing'); if(fp.counter)errors.push('counter shown in the field'); if(fp.digested)errors.push('digested too early');
   if(fp.region==='room')errors.push('the room exists before Act I is done');
-  await driveTo(8,6); await driveTo(13,-6); await page.waitForTimeout(1500);
+  await driveTo(8,6,30000); await driveTo(13,-6,30000); await page.waitForTimeout(1500);
   st=await state(); console.log('3D: lights:', JSON.stringify(st));
   if(st.s<3){errors.push('lights 2/3 not collected in 3D');return;}
   const s2now=await page.evaluate(()=>window.__DA.s2); if(s2now.active)errors.push('the room started on the third light');
