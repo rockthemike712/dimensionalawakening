@@ -396,8 +396,8 @@ const S2_ROUNDS=[
    intro:'One more.',
    hint:'Stand in the opening.'},
   {profile:z=>Math.pow(Math.cos(S2_K*z/SQF),2)*Math.exp(-(z/SQF)*(z/SQF)/20.5),
-   intro:'Last one.',
-   hint:()=>roomFold<.5?'Pull the new edge.':'Stand on the far marker. Or close your eyes.'}
+   intro:'Last one.',thresh:.7,needFold:true,
+   hint:()=>roomFold<.5?'Tap the glowing line behind the wall.':'Stand on the far marker. Or close your eyes.'}
 ];
 function gauss(mu,sig){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();
   return mu+sig*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
@@ -530,9 +530,14 @@ function buildStage2(){
   s2seam.position.set(S2_SEAM2X,.05,0);s2Group.add(s2seam);S2.seam2=s2seam;
   const s2halo=new THREE.Mesh(new THREE.BoxGeometry(.9,.02,14),new THREE.MeshBasicMaterial({color:0x20d9ff,transparent:true,opacity:.14,blending:THREE.AdditiveBlending}));
   s2halo.position.set(S2_SEAM2X,.03,0);s2Group.add(s2halo);S2.seam2Halo=s2halo;
-  const s2grab=new THREE.Mesh(new THREE.BoxGeometry(3.4,3,14),new THREE.MeshBasicMaterial({visible:false}));
-  s2grab.position.set(S2_SEAM2X,.8,0);s2Group.add(s2grab);S2.seam2Grab=s2grab;
-  s2seam.visible=s2halo.visible=false;
+  const s2curtain=new THREE.Mesh(new THREE.PlaneGeometry(14,2.9),
+    new THREE.MeshBasicMaterial({color:0x2ee9ff,transparent:true,opacity:.13,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false}));
+  s2curtain.rotation.y=Math.PI/2;s2curtain.position.set(S2_SEAM2X,1.45,0);s2Group.add(s2curtain);S2.seam2Curtain=s2curtain;
+  const s2rail=new THREE.Mesh(new THREE.BoxGeometry(.14,.1,14),new THREE.MeshBasicMaterial({color:0x8ffcff,transparent:true,opacity:.9}));
+  s2rail.position.set(S2_SEAM2X,2.9,0);s2Group.add(s2rail);S2.seam2Rail=s2rail;
+  const s2grab=new THREE.Mesh(new THREE.BoxGeometry(3.6,4.2,14),new THREE.MeshBasicMaterial({visible:false}));
+  s2grab.position.set(S2_SEAM2X,1.6,0);s2Group.add(s2grab);S2.seam2Grab=s2grab;
+  s2seam.visible=s2halo.visible=s2curtain.visible=s2rail.visible=false;
   // histogram bins (for matching; the visual is the screen)
   for(let i=0;i<S2_NB;i++)S2.bins.push({z:-S2_HALF+(i+.5)*(2*S2_HALF/S2_NB),n:0});
   // dot pool
@@ -552,7 +557,7 @@ function s2SetRound(r){
   S2.round=r;S2.roundT=clock.elapsedTime;S2.hold=0;S2.hinted=false;
   S2.prevTarget=S2.target||null;S2.morphT=clock.elapsedTime;
   if(r===3&&S2.seam2&&!S2.seam2.visible){
-    S2.seam2.visible=S2.seam2Halo.visible=true;
+    S2.seam2.visible=S2.seam2Halo.visible=S2.seam2Curtain.visible=S2.seam2Rail.visible=true;
     for(let z=-6;z<=6;z+=3)emitRipple(S2_SEAM2X,z,1.2);
     blip(392,.5,.1,'sine');setTimeout(()=>blip(523,.6,.1,'sine'),160);
   }
@@ -660,8 +665,9 @@ function updateStage2(dt,t){
     m=Math.max(0,1-l1*.5);
   }
   S2.match+=(m-S2.match)*(1-Math.pow(.05,dt));
-  S2.hold=S2.match>S2_THRESH?S2.hold+dt:Math.max(0,S2.hold-dt*1.5);
-  if(S2.hold>0&&S2.match>S2_THRESH){S2.toneT-=dt;if(S2.toneT<=0){S2.toneT=.26;blip(440+560*Math.min(1,S2.hold/S2_HOLD),.1,.05,'triangle');}}
+  const RR=S2_ROUNDS[S2.round], okNow=S2.match>(RR.thresh||S2_THRESH)&&(!RR.needFold||roomFold>.5);
+  S2.hold=okNow?S2.hold+dt:Math.max(0,S2.hold-dt*1.5);
+  if(S2.hold>0&&okNow){S2.toneT-=dt;if(S2.toneT<=0){S2.toneT=.26;blip(440+560*Math.min(1,S2.hold/S2_HOLD),.1,.05,'triangle');}}
   if(S2.hold>=S2_HOLD)s2RoundDone();
   if(S2.arrived&&!S2.hinted&&t-S2.roundT>8&&S2.hold/S2_HOLD<.3){S2.hinted=true;const h=S2_ROUNDS[S2.round].hint;setPrompt(typeof h==='function'?h():h);}
 }
@@ -879,6 +885,9 @@ function animate(){
    S2.seam2.material.color.setHex(on?0xffffff:0x60f7ff);
    S2.seam2.material.opacity=on?.95:.62+.3*Math.sin(t*3.1);
    S2.seam2Halo.material.opacity=on?.28:.09+.06*Math.sin(t*2.2);
+   S2.seam2Rail.material.color.setHex(on?0xffffff:0x8ffcff);
+   S2.seam2Rail.material.opacity=on?1:.55+.4*(.5+.5*Math.sin(t*3.1));
+   S2.seam2Curtain.material.opacity=on?.2:.09+.07*(.5+.5*Math.sin(t*3.1));
    if(on!==S2.pulledPrev){S2.pulledPrev=on;
      if(on&&S2.active&&S2.done<S2_NR&&S2.round===3)setPrompt('Now stand on the far marker.');}
  }
@@ -899,6 +908,7 @@ function animate(){
  let arrowTo=null;
  if(ct>=0)arrowTo=foldedPoint(seedData[ct].p);
  else if(S2.active&&!S2.arrived)arrowTo=S2.center.clone();
+ else if(S2.active&&S2.done<S2_NR&&S2.round===3&&roomFold<.5)arrowTo=new THREE.Vector3(S2_SEAM2X,1.6,playerPos.z*.4);
  if(arrowTo){
    beaconArrow.style.opacity=1;
    const bp=arrowTo;bp.y+=1.0;bp.project(camera);
