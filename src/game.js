@@ -49,13 +49,25 @@ export function setFoldTarget(v){foldTarget=THREE.MathUtils.clamp(v,0,1);}
 export let flat=0;
 export function setFlat(v){flat=THREE.MathUtils.clamp(v,0,1.4);}
 export const shape=()=>dim*(1-Math.min(1,flat));
+// look back over the shoulder for a moment: the camera yaws 180 degrees and returns;
+// the pad is ignored meanwhile so screen-relative input cannot flip under the thumb
+let lookT=-99, lookDur=0;
+export function lookBack(seconds=1.4){lookT=clock.elapsedTime;lookDur=seconds;}
+export function looking(){const k=(clock.elapsedTime-lookT)/lookDur;return k>=0&&k<1?Math.min(1,Math.min(k,1-k)*lookDur/.45):0;}
 export function addAwake(k){awakened=Math.min(1,awakened+k);planeMat.uniforms.uAwake.value=awakened;}
 
 // ---------- regions: the universe is a set of places that register themselves ----------
 export const regions=[];
 export let curRegion=null;
 export function registerRegion(r){r.built=!r.build;r.visited=false;regions.push(r);return r;}
-export function regionAt(x,z){return regions.find(r=>r.bounds&&(crossed?!r.page:r.page)&&x>=r.bounds.x0&&x<=r.bounds.x1&&z>=r.bounds.z0&&z<=r.bounds.z1)||null;}
+export function regionAt(x,z){return regions.find(r=>r.bounds&&r.built&&(crossed?!r.page:r.page)&&x>=r.bounds.x0&&x<=r.bounds.x1&&z>=r.bounds.z0&&z<=r.bounds.z1)||null;}
+// Act I is three rungs in order; the room is Act II and does not exist until they are done
+export const ACT1=['thin','corner','lamp'];
+const byId=id=>regions.find(r=>r.id===id);
+export function actDone(){return ACT1.every(id=>{const r=byId(id);return r&&r.done&&r.done();});}
+export function residue(id){const r=byId(id);return !!(r&&r.done&&r.done());}
+let walked=0, digestedAt=-1;                     // free play after the crossing: no signposts until digested
+export function digested(){return crossed&&digestedAt>=0;}
 export function inBounds(b,x,z,m=0){return x>=b.x0-m&&x<=b.x1+m&&z>=b.z0-m&&z<=b.z1+m;}
 function buildRegion(r){if(r.built)return;r.built=true;try{r.build&&r.build();}catch(e){console.error('region '+r.id+' build failed',e);}}
 
@@ -109,12 +121,9 @@ export function setPips(n,total){
     while(pipsEl.children.length>total)pipsEl.removeChild(pipsEl.lastChild);}
   [...pipsEl.children].forEach((el,i)=>el.classList.toggle('lit',i<n));}
 export function refreshHud(){
-  let label,n,total;
-  if(curRegion&&curRegion.hud){({label,n,total}=curRegion.hud());}
-  else if(S2.active){label='PATTERNS';n=S2.done;total=S2_NR;}
-  else if(crossed){const rs=regions.filter(r=>!r.page);label='PLACES';n=rs.filter(r=>r.visited).length;total=rs.length;}
-  else{label='LIGHTS';n=seeds;total=3;}
-  countEl.textContent=`${label} ${n} / ${total}`; setPips(n,total);
+  const h=curRegion&&curRegion.hud?curRegion.hud():null;
+  if(h){countEl.textContent=`${h.label} ${h.n} / ${h.total}`; setPips(h.n,h.total); countEl.style.opacity=.68; pipsEl.style.opacity=1;}
+  else{countEl.style.opacity=0; pipsEl.style.opacity=0;}       // no counter tells the player what to want
 }
 export function pulseFlash(){flashEl.style.opacity=.5;setTimeout(()=>flashEl.style.opacity=0,90)}
 
@@ -250,11 +259,13 @@ const pCore=new THREE.Mesh(new THREE.IcosahedronGeometry(.36,2),
   new THREE.MeshStandardMaterial({color:0xdfffff,emissive:0x49e9ff,emissiveIntensity:3,roughness:.18,metalness:.15}));
 const pHalo=new THREE.Mesh(new THREE.SphereGeometry(.6,24,24),
   new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.075,blending:THREE.AdditiveBlending,depthWrite:false}));
+const pShadow2=new THREE.Mesh(new THREE.CircleGeometry(.5,32),new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:.22}));
+pShadow2.rotation.x=-Math.PI/2; pShadow2.visible=false;
 const pShadow=new THREE.Mesh(new THREE.CircleGeometry(.5,32),
   new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:0}));
 pShadow.rotation.x=-Math.PI/2;pShadow.position.y=.02;
 const p3=new THREE.Group();p3.add(pCore,pHalo);
-export const player=new THREE.Group();player.add(pDisc,pRing,p3,pShadow);world.add(player);
+export const player=new THREE.Group();player.add(pDisc,pRing,p3,pShadow,pShadow2);world.add(player);
 
 scene.add(new THREE.HemisphereLight(0x8ceeff,0x04040c,1.3));
 const point=new THREE.PointLight(0x66f5ff,20,18);point.position.set(-4,6,2);scene.add(point);
@@ -263,8 +274,8 @@ const point=new THREE.PointLight(0x66f5ff,20,18);point.position.set(-4,6,2);scen
 // L1 teaches movement. L2/L3 are beyond the edge — reachable only through the fold.
 const seedData=[
  {p:new THREE.Vector3(-3,0,-1)},
- {p:new THREE.Vector3(4.6,0,2.7)},
- {p:new THREE.Vector3(5.0,0,-2.7)}
+ {p:new THREE.Vector3(8,0,6)},
+ {p:new THREE.Vector3(13,0,-6)}
 ];
 const seedMeshes=[], beams=[], glows=[];
 // a light: the game's one signpost. Regions get one at their entrance.
@@ -312,9 +323,8 @@ const lmNote=h=>(Math.round(h*10)%3===0)?'A':'E';        // 2.4 1.2 .6 -> A ; 1.
 const lmFreq=h=>110*2.4/h;
 export const landmarks=[]; let lastRing={l:null,t:-99}, tpCool=-99, ringCount=0, tpCount=0, grownCount=0;
 function lmBlocked(x,z){
-  if(Math.abs(x)<1.6) return true;
-  if(x>2&&Math.abs(z)<2.2) return true;        // keep the room's flight path clear
-  if(Math.abs(x-6.6)<1.2||x>8.3) return true;   // and the wall / the new edge / screen
+  if(Math.abs(x)<1.6) return true;              // the edge itself
+  if(x>0&&Math.abs(z)<1.2&&x<4) return true;     // where the player lands after the crossing
   return false;
 }
 const LM_GEO={}, LM_BAND={}, WHITE=new THREE.Color(1,1,1), _lp=new THREE.Vector3();
@@ -334,9 +344,11 @@ export function makeLandmark(x,z,h,grow=false){
 }
 { // the first three reeds on each side of the edge always hold an octave and a fifth
   const seed={left:[2.4,1.2,1.6],right:[2.4,1.2,1.6]};
-  for(let i=0;i<22;i++){
-    const x=-10+Math.random()*20,z=-7+Math.random()*14;
+  for(let i=0;i<40;i++){
+    const x=-10+Math.random()*22,z=-8+Math.random()*16;
     if(lmBlocked(x,z)) continue;
+    if(landmarks.some(l=>Math.hypot(l.x-x,l.z-z)<1.3)) continue;
+    if(seedData.some(sd=>Math.hypot(sd.p.x-x,sd.p.z-z)<1.6)) continue;
     const side=x<0?'left':'right';
     const h=seed[side].length?seed[side].shift():LM_H[Math.floor(Math.random()*LM_H.length)];
     makeLandmark(x,z,h);
@@ -412,7 +424,8 @@ function updateLandmarks(dt,t){
    l.ring=Math.max(0,l.ring-dt*2.2); l.white=Math.max(0,l.white-dt*1.6);
    if(l.x<=0)l.pivot.position.set(l.x,0,l.z); else l.pivot.position.copy(foldedPoint(_lp.set(l.x,0,l.z)));
    l.pivot.rotation.z=l.x<=0?0:th;
-   l.m.scale.y=Math.max(.001,sy*ge); l.m.scale.x=l.m.scale.z=1+l.ring*.12*(1-dim)+(1-ge)*.4;
+   const sink=l.sunk?1-ease((t-l.sinkT)/1.6):0; l.pivot.visible=sink<1;
+   l.m.scale.y=Math.max(.001,sy*ge*(1-sink)); l.m.scale.x=l.m.scale.z=1+l.ring*.12*(1-dim)+(1-ge)*.4;
    l.m.rotation.x=l.bz*.55*dim; l.m.rotation.z=-l.bx*.55*dim;
    const lit=l.ring>0||l.white>0;
    if(lit||l.lit){l.m.material.emissiveIntensity=1+l.ring*2.6+l.white*3;l.m.material.emissive.copy(l.col).multiplyScalar(.55).lerp(WHITE,l.white);l.lit=lit;}
@@ -431,6 +444,7 @@ function updateLandmarks(dt,t){
 function brushLandmarks(dt,t){
  const sp=velocity.length();
  for(const l of landmarks){
+   if(l.sunk)continue;
    const dx=l.x-playerPos.x, dz=l.z-playerPos.z, d=Math.hypot(dx,dz), inside=d<.9;
    if(inside&&!l.inside){
      const dir=d>1e-3?new THREE.Vector3(dx/d,0,dz/d):new THREE.Vector3(1,0,0);
@@ -446,7 +460,7 @@ function brushLandmarks(dt,t){
  }
 }
 function tapLandmark(){
- const hit=raycaster.intersectObjects(landmarks.map(l=>l.m))[0]; if(!hit) return false;
+ const hit=raycaster.intersectObjects(landmarks.filter(l=>!l.sunk).map(l=>l.m))[0]; if(!hit) return false;
  const l=landmarks.find(q=>q.m===hit.object); if(!l) return false;
  const dir=new THREE.Vector3(l.x-playerPos.x,0,l.z-playerPos.z); if(dir.lengthSq()<1e-4)dir.set(1,0,0); dir.normalize();
  audio(); ringLandmark(l,1,dir,clock.elapsedTime); return true;
@@ -479,7 +493,8 @@ function roomFoldPoint(v){
 const S2_HOLD=1.4, S2_THRESH=.58, S2_NB=40, S2_HALF=5;
 const inRoom=()=>!!(curRegion&&curRegion.id==='room');
 registerRegion({id:'room',name:'THE ROOM',bounds:{x0:1.4,x1:11.8,z0:-8,z1:8},key:262,
-  hud:()=>S2.active?{label:'PATTERNS',n:S2.done,total:S2_NR}:{label:'LIGHTS',n:seeds,total:3},
+  buildWhen:()=>actDone(), build(){startStage2();},
+  hud:()=>S2.active?{label:'PATTERNS',n:S2.done,total:S2_NR}:null,
   onEnter(){if(S2.active){eyeBtn.style.display='grid';if(!S2.eyeUsed)eyeLabel.style.display='block';}},
   onLeave(){eyeBtn.style.display='none';eyeLabel.style.display='none';if(S2.active){S2.marker.visible=false;setPrompt('');}},
   done:()=>S2.done>=S2_NR});
@@ -671,10 +686,15 @@ export function startStage2(){
   if(S2.active)return;
   buildStage2();
   S2.active=true;S2.startT=clock.elapsedTime;s2Group.visible=true;
-  eyeBtn.style.display='grid';eyeLabel.style.display='block';
+  const room=byId('room'); if(room)room.built=true;
+  for(const l of landmarks)if(inBounds(room.bounds,l.x,l.z,.6)&&!l.sunk){l.sunk=true;l.sinkT=clock.elapsedTime;}   // the reeds it rises through sink
+  if(inRoom()){eyeBtn.style.display='grid';eyeLabel.style.display='block';}
   s2SetRound(0);refreshHud();
-  setPrompt('Watch the screen.');
-  emitRipple(S2_EMIT.x,S2_EMIT.z,1.6);
+  // it rises out of the floor where the player first stood on the paper
+  S2.riseT=clock.elapsedTime; s2Group.scale.y=.001;
+  for(let z=-6;z<=6;z+=2)setTimeout(()=>emitRipple(S2_BARX,z,1.3),Math.abs(z)*90);
+  depthChord();
+  if(!inRoom())setPrompt('');
 }
 function s2Hit(z){
   const bi=Math.floor((z+S2_HALF)/(2*S2_HALF)*S2_NB);
@@ -689,14 +709,16 @@ function s2RoundDone(){
   for(let i=0;i<S2_NB;i+=6)emitRipple(S2_SCRX-.5,S2.bins[i].z,.5);
   emitRipple(S2.markerPos.x,S2.markerPos.z,1.4);
   if(S2.done>=S2_NR){
-    setTimeout(()=>setPrompt(nextRegion()?'Follow the lights.':''),1400);
+    setTimeout(()=>setPrompt(''),1400);
   }else setTimeout(()=>{s2Reset();s2SetRound(S2.done);},1400);
 }
 function updateStage2(dt,t){
   if(!S2.active)return;
+  if(S2.riseT!==undefined){const k=ease((t-S2.riseT)/2.4); s2Group.scale.y=Math.max(.001,k*(1+.18*Math.sin(k*Math.PI)*(1-k))); if(k>=1){s2Group.scale.y=1;S2.riseT=undefined;}}
   S2.emitter.rotation.y=t*1.1;S2.emitter.position.y=.8+.1*Math.sin(t*2.3);
-  if(!S2.arrived&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<6){
+  if(!S2.arrived&&S2.riseT===undefined&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<6){
     S2.arrived=true;S2.roundT=t;setPrompt(S2_ROUNDS[S2.round].intro);
+    eyeBtn.style.display='grid';if(!S2.eyeUsed)eyeLabel.style.display='block';
   }
   S2.spawnT-=dt;
   if(inRoom()&&S2.spawnT<=0&&t-S2.celebT>=1.4){
@@ -791,7 +813,7 @@ function collectSeed(i){
    moveStatus.style.opacity=0; foldTarget=.15;
    setPrompt('Grab the glowing edge. Pull.');
  }
- if(seeds===3)setTimeout(startStage2,1500);
+ if(seeds>=2)saveGame();
 }
 
 // ---------- the crossing: birth of depth ----------
@@ -802,7 +824,7 @@ function birthOfDepth(t){
   emitRipple(playerPos.x,playerPos.z,1.6);
   awakened=Math.min(1,awakened+.3); planeMat.uniforms.uAwake.value=awakened;
   setPrompt('');
-  setTimeout(()=>setPrompt('Follow the lights.'),2600);
+  walked=0; digestedAt=-1;
   setTimeout(()=>{foldTarget=0;},1500);          // the sheet settles flat beneath you
   dimLabel.textContent='3D'; dimLabel.style.letterSpacing='.6em';
   setTimeout(()=>dimLabel.style.letterSpacing='.3em',1200);
@@ -811,6 +833,7 @@ function birthOfDepth(t){
 
 // ---------- movement (screen-relative: the camera decides what "up" means) ----------
 const _pdir=new THREE.Vector3(), _ga=new THREE.Vector3(), _gb=new THREE.Vector3();
+let steps=0, flatPulse=0, mirrorT=0, lampResidue=false;
 function guideTo(a,b){
   const arr=guideLine.geometry.attributes.position.array; arr[0]=a.x;arr[1]=a.y;arr[2]=a.z;arr[3]=b.x;arr[4]=b.y;arr[5]=b.z;
   guideLine.geometry.attributes.position.needsUpdate=true;
@@ -820,6 +843,7 @@ function guideTo(a,b){
 function updatePlayer(dt,t){
  let dx=(keys['KeyD']||keys['ArrowRight']?1:0)-(keys['KeyA']||keys['ArrowLeft']?1:0)+held.x;
  let dz=(keys['KeyS']||keys['ArrowDown']?1:0)-(keys['KeyW']||keys['ArrowUp']?1:0)+held.z;
+ if(looking()>0){dx=0;dz=0;}
  dx=THREE.MathUtils.clamp(dx,-1,1); dz=THREE.MathUtils.clamp(dz,-1,1);
  const dir=_pdir.set(0,0,0).addScaledVector(rgt,dx).addScaledVector(fwd,-dz);
  if(dir.lengthSq()>0)dir.normalize();
@@ -864,13 +888,20 @@ function updatePlayer(dt,t){
  }
  brushLandmarks(dt,t);
  moveAccum+=velocity.length()*dt;
- if(moveAccum>1.1){emitRipple(playerPos.x,playerPos.z,.9);moveAccum=0;}
+ if(moveAccum>1.1){emitRipple(playerPos.x,playerPos.z,.9);moveAccum=0;steps++;
+   if(residue('thin')&&!(curRegion&&curRegion.id==='thin')&&steps%5===0)flatPulse=1;}   // after Thin: a flicker of flatness in the stride
+ if(crossed){walked+=velocity.length()*dt; if(digestedAt<0&&(t-dimT>60||walked>40)){digestedAt=t;setPrompt(nextRegion()?'Follow the lights.':'');}}
+ flatPulse=Math.max(0,flatPulse-dt*3.2);
 
  const rp=foldedPoint(playerPos);player.position.copy(rp);
- const sh=shape(), squash=Math.max(0,flat-1);           // flat>1 is the overshoot of a squash
+ const sh=shape()*(1-flatPulse*.7), squash=Math.max(0,flat-1);   // flat>1 is the overshoot of a squash; flatPulse is Thin's residue
  pDisc.scale.setScalar(Math.max(.001,(1-sh)*(1+squash*.6))); pRing.scale.setScalar(Math.max(.001,(1-sh)*(1+squash*.6)));
  p3.scale.setScalar(Math.max(.001,sh)); p3.position.y=.26*sh;
  pShadow.material.opacity=.3*sh;
+ // after the Corner: now and then a second, mirrored shadow; after the Lamp: the shadow is no longer quite black
+ if(residue('corner')){mirrorT-=dt; if(mirrorT<-.18)mirrorT=3+Math.random()*4; pShadow2.visible=mirrorT<0; pShadow2.position.set(-.9,.02,.6);}
+ else pShadow2.visible=false;
+ if(!lampResidue&&residue('lamp')){lampResidue=true;pShadow.material.color.setHex(0x16222e);addAwake(.2);}
  player.scale.setScalar(THREE.MathUtils.lerp(portraitMode()?1.5:1,1,sh));
  p3.rotation.y+=dt*(.7+awakened*1.8);
  pHalo.scale.setScalar(1+.08*Math.sin(performance.now()*.004));
@@ -878,7 +909,7 @@ function updatePlayer(dt,t){
 
 function updateSeeds(t){
  const ct=currentTarget();
- if(ct>=0){
+ if(ct>=0&&!crossed){
    const a=foldedPoint(playerPos); a.y+=.18;
    const b=foldedPoint(seedData[ct].p); b.y+=.18;
    guideTo(a,b);
@@ -890,13 +921,14 @@ function updateSeeds(t){
  seedMeshes.forEach((g,i)=>{
    if(seedData[i].taken)return;
    const rp=foldedPoint(seedData[i].p);g.position.copy(rp);
-   animateLight(g,t,i===ct); g.position.y+=rp.y;
+   animateLight(g,t,crossed?true:i===ct); g.position.y+=rp.y;
    if(foldedPoint(playerPos).distanceTo(g.position)<.85)collectSeed(i);
  });
+ const next=crossed?nextRegion():null;
  for(const L of regionLights){
-   const r=L.userData.region, active=!r.visited||!(r.done&&r.done());
+   const r=L.userData.region;
    L.visible=crossed&&!(r.done&&r.done());
-   if(L.visible)animateLight(L,t,active&&!r.visited);
+   if(L.visible)animateLight(L,t,r===next);
  }
 }
 
@@ -969,7 +1001,7 @@ const DIR_UP=new THREE.Vector3(0,1,0);
 function updateCamera(t){
   const e=dim, sh=shape(), por=portraitMode();
   // screen-relative axes rotate 90 degrees across the shift: up = -z in 2D, +x in 3D
-  const yaw=e*Math.PI/2;
+  const yaw=e*Math.PI/2+Math.PI*looking();
   fwd.set(Math.sin(yaw),0,-Math.cos(yaw)); rgt.set(Math.cos(yaw),0,Math.sin(yaw));
   const fov=THREE.MathUtils.lerp(4,por?70:60,sh);
   const H=THREE.MathUtils.lerp(por?20:17,por?13:11,sh);
@@ -1033,11 +1065,11 @@ function animate(){
  // beacon arrow toward the current light (or the apparatus)
  const ct=currentTarget();
  let arrowTo=null;
- if(ct>=0)arrowTo=foldedPoint(seedData[ct].p);
- else if(S2.active&&!S2.arrived)arrowTo=S2.center.clone();
+ if(!crossed&&ct>=0)arrowTo=foldedPoint(seedData[ct].p);
+ else if(S2.active&&S2.riseT===undefined&&!S2.arrived)arrowTo=S2.center.clone();
  else if(S2.active&&S2.done<S2_NR&&S2.round===3&&roomFold<.5&&curRegion&&curRegion.id==='room')arrowTo=new THREE.Vector3(S2_SEAM2X,1.6,playerPos.z*.4);
- else if(crossed&&S2.arrived&&(S2.done>=S2_NR||!curRegion||curRegion.id!=='room')){
-   const next=nextRegion(); if(next&&next!==curRegion)arrowTo=next.entrance.clone();
+ else if(digested()&&!(S2.active&&inRoom()&&S2.done<S2_NR)){
+   const next=nextRegion(); if(next&&next!==curRegion)arrowTo=next.entrance?next.entrance.clone():S2.center.clone();
  }
  if(arrowTo){
    beaconArrow.style.opacity=1;
@@ -1051,13 +1083,10 @@ function animate(){
  fitViewport();
  renderer.render(scene,camera);
 }
-function nextRegion(){
-  let best=null,bd=1e9;
-  for(const r of regions){
-    if(!r.entrance||r.id==='room'||(r.done&&r.done())||r.visited)continue;
-    const d=Math.hypot(r.entrance.x-playerPos.x,r.entrance.z-playerPos.z); if(d<bd){bd=d;best=r;}
-  }
-  return best;
+function nextRegion(){        // the next rung of the act, in order; never the nearest; then the room
+  for(const id of ACT1){const r=byId(id); if(r&&r.built&&!(r.done&&r.done()))return r;}
+  const room=byId('room'); if(room&&room.built&&S2.active&&S2.done<S2_NR)return room;
+  return null;
 }
 
 // ---------- save / continue ----------
@@ -1081,10 +1110,11 @@ export function applySave(d){
   awakened=typeof d.awakened==='number'?d.awakened:Math.min(1,seeds*.25+.3);planeMat.uniforms.uAwake.value=awakened;
   crossed=true;dimT=-99;foldTarget=0;fold=0;dimLabel.textContent='3D';moveStatus.style.opacity=0;
   playerPos.set(2.2,0,-.5);
-  if(seeds>=3){startStage2();S2.arrived=!!d.s2.arrived;S2.done=Math.min(S2_NR,d.s2.done|0);
+  for(const r of regions){if(r.id!=='room')buildRegion(r);if(d.visited&&d.visited.includes(r.id))r.visited=true;}
+  for(const r of regions)if(r.id!=='room'&&r.load&&d.regions&&d.regions[r.id]){try{r.load(d.regions[r.id]);}catch(e){console.error(e);}}
+  if(actDone()||(d.s2&&d.s2.active)){startStage2();S2.riseT=undefined;s2Group.scale.y=1;S2.arrived=!!d.s2.arrived;S2.done=Math.min(S2_NR,d.s2.done|0);
     if(S2.done<S2_NR)s2SetRound(Math.min(S2_NR-1,Math.max(S2.done,d.s2.round|0)));else{S2.marker&&(S2.marker.visible=false);}}
-  for(const r of regions){buildRegion(r);if(d.visited&&d.visited.includes(r.id))r.visited=true;}
-  for(const r of regions)if(r.load&&d.regions&&d.regions[r.id]){try{r.load(d.regions[r.id]);}catch(e){console.error(e);}}
+  digestedAt=0; walked=0;
   if(d.pos&&d.pos[0]>1.4)playerPos.set(d.pos[0],0,d.pos[2]);
   if(S2.active&&S2.seam2&&S2.seam2.visible&&d.roomFold>.5){roomFoldTarget=1;roomFold=1;}
   velocity.set(0,0,0);refreshHud();setPrompt('');
@@ -1162,6 +1192,9 @@ window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get s
   get region(){return curRegion?curRegion.id:null},
   get regions(){return regions.map(r=>({id:r.id,built:r.built,visited:r.visited,done:!!(r.done&&r.done()),state:r.debug?r.debug():undefined}))},
   save:saveGame,loadSave,applySave,clearSave,
+  get actDone(){return actDone()},get digested(){return digested()},get next(){const n=nextRegion();return n?n.id:null},
+  get arrow(){return beaconArrow.style.opacity==='1'},get counterShown(){return countEl.style.opacity!=='0'},
+  digest(){digestedAt=clock.elapsedTime;},unlockRoom(){startStage2();S2.riseT=undefined;s2Group.scale.y=1;},
   setPos(x,z){playerPos.set(x,0,z);velocity.set(0,0,0);},
   get _lm(){return landmarks},get _plane(){return sheetMesh},get flat(){return flat},
-  jump3d(){if(!crossed){crossed=true;dimT=-99;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';}}};
+  jump3d(){if(!crossed){crossed=true;dimT=clock.elapsedTime-2.5;walked=0;digestedAt=-1;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';}}};
