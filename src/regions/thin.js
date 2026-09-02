@@ -34,6 +34,35 @@ import {
 // full size: they fall in, get put back on the near lip, and only then
 // discover column C standing just off to the side, close enough to the lip
 // that squashing there and stepping across actually crosses it flat.
+//
+// Third review (critic: REVISE). Everything above still stands; what
+// failed was the region's edges:
+//  - Two lanes ran around the whole corridor through the open field beside
+//    it (north along z ~ -9.5..-11, south between the world clamp and
+//    BOUNDS.z0) since a wall only ever blocks an x-crossing *inside*
+//    bounds, and the open field beside the region is nobody's territory.
+//    Sealed with real side walls (buildSideWall, below) along z=BOUNDS.z1 and
+//    z=BOUNDS.z0, spanning x from wall A to just past the goal, plus a
+//    hard z-clamp in `constrain` for the same x-span — checked *before*
+//    the `curRegion!==REGION` guard, since the flank itself sits just
+//    outside `bounds` and would never reach that guard's body otherwise.
+//  - Standing on the goal unearned did nothing; it now refuses (dim
+//    ripple, low blip, the core dips) once per approach, counted in
+//    `debug().refusals`.
+//  - The stuck-timer at a wall fired "Flatten first." even when the
+//    player was already flat but simply misaligned with the slot; split
+//    into two branches so a flat-but-off-slot player gets a lit-rail,
+//    directional ripple instead of being told to do a thing already done.
+//  - Column C moved from (22,-18.6) to (23.4,-18.4): from the put-back lip
+//    (GAP_NEAR-.4 = 23.6) its centre now projects on-screen and a straight
+//    ArrowLeft from the lip passes inside its radius. It flares for 2s
+//    after every put-back.
+//  - The gap's containment is now checked every frame a player is inside
+//    its x-span, not only on the crossing frame, so stopping inside it at
+//    full size (rather than running through it) still falls.
+//  - The entrance moved to (7,-14): from there column A sits ahead and
+//    only slightly aside, not directly lateral to a camera whose forward
+//    vector carries almost no z-component.
 // =====================================================================
 
 const BOUNDS = { x0: 4, x1: 31, z0: -27, z1: -11 };
@@ -66,7 +95,15 @@ const HOLD_TIME = 0.25;
 const COLS = [
   { x: 9, z: CZ, r: 1.5, vr: 1.5, mesh: null },      // A: the toy; also the turn. Edge at x=10.5.
   { x: 18.3, z: CZ, r: 1.5, vr: 1.5, mesh: null },   // B: 6.3 units past A's edge (near edge 16.8) — the carry drains crossing this stretch.
-  { x: 22, z: CZ - 2.6, r: 1.5, vr: 1.5, mesh: null }, // C: the gap's column. Off the corridor line — its edge (z=-17.1) never reaches CZ, so a straight run through A/B never triggers it.
+  // C: the gap's column. Off the corridor line — its edge (z=-16.9) never
+  // reaches CZ (-16), so a straight run through A/B never triggers it. Third
+  // review moved it from (22,-18.6): from the put-back lip (GAP_NEAR-.4 =
+  // 23.6, on CZ) its old position projected off the left edge of the screen
+  // (behind the camera's near-zero-z forward vector) and a straight ArrowLeft
+  // from the lip missed its radius entirely. At (23.4,-18.4) — 0.2 units of
+  // x from the lip, well inside r — it is on screen from the put-back point
+  // and a straight ArrowLeft from the lip crosses right through it.
+  { x: 23.4, z: -18.4, r: 1.5, vr: 1.5, mesh: null, isGapCol: true },
 ];
 
 // Two thin walls crossing the corridor face-on (a plane at fixed x,
@@ -75,8 +112,13 @@ const COLS = [
 // the player for it — close enough that clearing the column and reaching
 // the wall is one continuous, still-flat motion.
 const WALLS = [
-  { x: 11.0, slotZ: CZ, half: 0.75, passed: false, lastHit: -99, stuckT: 0, promptOn: false, mesh: null },  // 0.5 past A's edge (10.5)
-  { x: 20.3, slotZ: CZ, half: 0.75, passed: false, lastHit: -99, stuckT: 0, promptOn: false, mesh: null },  // 0.5 past B's edge (19.8)
+  // stuckT/promptOn: the "flatten first" timer, only for a full-size player
+  // parked at the slot. alignStuckT/hintOn/lastHint: a *separate* timer for
+  // a player who is already flat but not lined up with the slot — third
+  // review split these, since the old single timer told a flat player to
+  // do the thing they'd already done (see the `update` wall loop below).
+  { x: 11.0, slotZ: CZ, half: 0.75, passed: false, lastHit: -99, stuckT: 0, promptOn: false, alignStuckT: 0, hintOn: false, lastHint: -99, mesh: null },  // 0.5 past A's edge (10.5)
+  { x: 20.3, slotZ: CZ, half: 0.75, passed: false, lastHit: -99, stuckT: 0, promptOn: false, alignStuckT: 0, hintOn: false, lastHint: -99, mesh: null },  // 0.5 past B's edge (19.8)
 ];
 
 // The gap: a trench crossing the corridor, spanning the region's full z so
@@ -88,6 +130,22 @@ const WALLS = [
 const GAP_NEAR = 24.0, GAP_FAR = 25.4;
 const GOAL = new THREE.Vector3(27.6, 0, CZ);
 
+// Sealing the corridor's flanks (item 1): a player standing just outside
+// `bounds` to the north (z > BOUNDS.z1) or south (z < BOUNDS.z0) is free
+// ground as far as any *other* region is concerned, so nothing there ever
+// stopped a straight walk around the whole obstacle course. SEAL_X0/X1
+// bound the stretch of the corridor this applies to — from wall A's own
+// entrance margin to just past the goal — and are used for BOTH the drawn
+// side walls (buildSideWall, below) and the constrain-time clamp, so the
+// two always agree. SEAL_MARGIN caps how far outside BOUNDS.z0/z1 the
+// clamp still reaches for: wide enough to catch a player walking the
+// flank at realistic speed (well under one frame's travel), narrow enough
+// to stay short of Corner's own bounds (z0=-9, two units north of z1=-11)
+// so this never reaches into another region's territory.
+const SEAL_X0 = WALLS[0].x - .5;         // 10.5 — wall A's entrance margin
+const SEAL_X1 = GOAL.x + 2;              // 29.6 — just past the goal
+const SEAL_MARGIN = 2;
+
 // hoisted: `for...of ['rimNear','rimFar']` was reallocating this array
 // every in-region frame of the whole game.
 const RIM_KEYS = ['rimNear', 'rimFar'];
@@ -97,9 +155,14 @@ let flatRaw = 0, flatVel = 0, wasSquashed = false, holdT = 0;
 let fallActive = false, fallT = 0, fallSide = 'near';
 const fallPos = new THREE.Vector3();
 let flareT = -99, flareSide = null;      // rim flare on put-back
+let colCFlareT = -99;                    // column C's ring flare on put-back (item 4)
 let extraBlipAt = -1;                    // game-time-scheduled overshoot tick
 let goalLightGroup = null;
+let goalGutterT = -99;                   // the core dips for a moment on a refusal (item 2)
+let refusals = 0, refusalActive = false; // once per approach, standing on the goal unearned
+let lastSealHit = -99, sealHits = 0;     // item 1's thud+ripple, debounced
 const gapMesh = {};
+const sideWalls = { north: null, south: null };
 let p3Cache = null;
 
 // the sphere group is a child of `player` but not exported by the core;
@@ -190,6 +253,24 @@ function buildWall(w) {
   world.add(g); w.mesh = { g, rails };
 }
 
+// A side wall closes one flank of the corridor: a low luminous rail at
+// the floor plus a translucent panel above it, both spanning x from
+// SEAL_X0 to SEAL_X1 at a fixed z (BOUNDS.z1 for the north flank,
+// BOUNDS.z0 for the south one) — the exact span `constrain` also clamps
+// against, so what's drawn and what's enforced never disagree.
+function buildSideWall(zLine) {
+  const g = new THREE.Group();
+  const width = SEAL_X1 - SEAL_X0, midX = (SEAL_X0 + SEAL_X1) / 2;
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(width, 1.7, .16),
+    new THREE.MeshBasicMaterial({ color: 0x49c8e8, transparent: true, opacity: .3, side: THREE.DoubleSide }));
+  panel.position.set(midX, .95, zLine); g.add(panel);
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(width, .1, .1),
+    new THREE.MeshBasicMaterial({ color: 0xeafeff, transparent: true, opacity: .8, blending: THREE.AdditiveBlending, depthWrite: false }));
+  rail.position.set(midX, .08, zLine); g.add(rail);
+  world.add(g);
+  return { g, panel, rail };
+}
+
 function buildGap() {
   const midX = (GAP_NEAR + GAP_FAR) / 2, depth = Math.abs(GAP_FAR - GAP_NEAR);
   const zMid = (BOUNDS.z0 + BOUNDS.z1) / 2, zSpan = BOUNDS.z1 - BOUNDS.z0;
@@ -243,6 +324,7 @@ function updateTwins(t) {
 }
 
 function animateCosmetics(t, inRegion) {
+  const colCFlare = t - colCFlareT < 2 ? 1 - (t - colCFlareT) / 2 : 0;
   for (const c of COLS) {
     if (!c.mesh) continue;
     const near = inRegion && Math.hypot(playerPos.x - c.x, playerPos.z - c.z) < c.r * 1.3;
@@ -252,11 +334,26 @@ function animateCosmetics(t, inRegion) {
     c.mesh.floor.material.opacity = .2 + boost * .5;
     c.mesh.core.intensity = 7 + boost * 16;
     c.mesh.core.visible = inRegion;   // three live PointLights cost nothing to hide when nobody's looking
+    // item 4: column C's ring flares bright for 2s after every put-back,
+    // pointing the player at it without a prompt.
+    if (c.isGapCol && colCFlare > 0) {
+      c.mesh.ring.material.opacity = Math.min(1, .5 + colCFlare * .8);
+      c.mesh.core.intensity = Math.max(c.mesh.core.intensity, 9 + colCFlare * 14);
+    }
   }
   for (const w of WALLS) {
     if (!w.mesh) continue;
-    const op = w.passed ? .3 : .55 + .25 * Math.sin(t * 3.2);
+    // item 3: while a flat player is stuck off the slot, the rails run
+    // brighter and faster than the idle shimmer — a direction, not a word.
+    let op = w.passed ? .3 : .55 + .25 * Math.sin(t * 3.2);
+    if (w.hintOn) op = .85 + .15 * Math.sin(t * 8);
     for (const r of w.mesh.rails) r.material.opacity = op;
+  }
+  // item 1: the sealed flanks read as a real edge, not just a rule —
+  // a faint shimmer keeps them from looking like static geometry.
+  for (const key of ['north', 'south']) {
+    const sw = sideWalls[key]; if (!sw) continue;
+    sw.rail.material.opacity = .6 + .2 * Math.sin(t * 1.6 + (key === 'north' ? 0 : Math.PI));
   }
   if (gapMesh.rimNear) {
     const k = Math.max(0, Math.min(1, flatRaw));
@@ -280,8 +377,11 @@ function animateGoalLight(t, inRegion, earned) {
   const u = goalLightGroup.userData;
   goalLightGroup.position.y = .5 + .12 * Math.sin(t * 2.1);
   goalLightGroup.rotation.y = t * .5;
-  if (u.ring) { u.ring.rotation.z = t * .25; u.ring.material.opacity = earned ? .65 : .2; }
-  if (u.core) u.core.material.emissiveIntensity = earned ? 4 : 1.1;
+  // item 2: an unearned refusal dips the core for a moment — the world's
+  // way of saying "not yet" without a word.
+  const gutter = t - goalGutterT < .5 ? 1 - (t - goalGutterT) / .5 : 0;
+  if (u.ring) { u.ring.rotation.z = t * .25; u.ring.material.opacity = earned ? .65 : Math.max(.04, .2 - gutter * .16); }
+  if (u.core) u.core.material.emissiveIntensity = earned ? 4 : Math.max(.25, 1.1 - gutter * .85);
   if (u.beam) { u.beam.visible = earned; if (earned) u.beam.material.opacity = .13 + .10 * (.5 + .5 * Math.sin(t * 3.2)); }
   if (u.glow) u.glow.visible = inRegion;   // another live PointLight — was lit everywhere, even outside the region
   goalLightGroup.visible = !goalReached;
@@ -315,13 +415,20 @@ const REGION = registerRegion({
   id: 'thin',
   name: 'THIN',
   bounds: BOUNDS,
-  entrance: new THREE.Vector3(9, 0, -12.5),
+  // item 6: the old entrance (9,-12.5) shares column A's own x — from
+  // there column A sits directly to the *side*, not ahead, of a camera
+  // whose forward vector carries almost no z-component (it looks down
+  // +x, tilted only in y). Moved so column A is a couple of units ahead
+  // in x as well as a little to the side: on screen from the first frame.
+  entrance: new THREE.Vector3(7, 0, -14),
   color: PALE,
 
   build() {
     for (const c of COLS) buildColumn(c);
     for (const w of WALLS) buildWall(w);
     buildGap();
+    sideWalls.north = buildSideWall(BOUNDS.z1);
+    sideWalls.south = buildSideWall(BOUNDS.z0);
     goalLightGroup = makeLight(GOAL, PALE);
     buildTwins();
   },
@@ -346,6 +453,14 @@ const REGION = registerRegion({
 
     let insideAny = false;
     for (const c of COLS) if (Math.hypot(playerPos.x - c.x, playerPos.z - c.z) < c.r) insideAny = true;
+    // item 3: a player who arrived at a wall already flat (via a column)
+    // and is now parked there off the slot must not decay out of flatness
+    // just from being blocked — that would turn the new alignment hint
+    // back into an unflattening-then-"Flatten first." loop. Sustaining
+    // only applies once *already* reasonably flat (flatRaw>.5), so
+    // approaching a wall at full size never flattens by proximity alone —
+    // only a column does that.
+    if (flatRaw > .5 && WALLS.some(w => !w.passed && Math.abs(playerPos.x - w.x) < 1.1)) insideAny = true;
     holdT = insideAny ? HOLD_TIME : Math.max(0, holdT - dt);
     const target = (insideAny || holdT > 0) ? 1 : 0;
     stepSpring(target, dt);
@@ -370,15 +485,34 @@ const REGION = registerRegion({
     const vOpRaw = .35 * Math.max(0, Math.min(1, flatRaw)) * Math.max(0, Math.min(1, carryFrac));
     if (Math.abs(vOpRaw - lastVeilRaw) > .01) { lastVeilRaw = vOpRaw; veilEl.style.opacity = vOpRaw.toFixed(3); }
 
+    // item 3: a player stuck at a wall is either not flat (needs telling)
+    // or flat but off the slot (needs *showing*). The old single timer
+    // fired "Flatten first." for both, which is wrong for the second case
+    // — a flat player doesn't need to be told to do a thing they've
+    // already done. The two are mutually exclusive branches on `flat`.
     for (const w of WALLS) {
-      if (w.passed) { w.stuckT = 0; continue; }
+      if (w.passed) { w.stuckT = 0; w.alignStuckT = 0; w.hintOn = false; continue; }
       const near = Math.abs(playerPos.x - w.x) < 1.1 && Math.abs(playerPos.z - w.slotZ) < 3.5;
+      const aligned = Math.abs(playerPos.z - w.slotZ) < w.half;
       if (near && flat <= .8) {
-        w.stuckT += dt;
+        w.stuckT += dt; w.alignStuckT = 0; w.hintOn = false;
         if (w.stuckT > 8 && !w.promptOn) { w.promptOn = true; setPrompt('Flatten first.'); }
+      } else if (near && flat > .8 && !aligned) {
+        w.stuckT = 0;
+        if (w.promptOn) { w.promptOn = false; setPrompt(''); }
+        w.alignStuckT += dt;
+        w.hintOn = w.alignStuckT > 1.5;
+        // a ripple that walks along the wall toward the slot, repeated
+        // while the player stays stuck — a direction, not a word.
+        if (w.hintOn && t - w.lastHint > .9) {
+          w.lastHint = t;
+          const dir = Math.sign(w.slotZ - playerPos.z) || 1;
+          emitRipple(w.x, playerPos.z + dir * .6, .7, new THREE.Color(0xffffff));
+          blip(520, .09, .05, 'sine', (playerPos.z - w.slotZ) / 6);
+        }
       } else {
         if (w.promptOn) { w.promptOn = false; setPrompt(''); }
-        w.stuckT = 0;
+        w.stuckT = 0; w.alignStuckT = 0; w.hintOn = false;
       }
     }
 
@@ -392,19 +526,51 @@ const REGION = registerRegion({
       if (d < 1.0 && earned) {
         goalReached = true; chime(); addAwake(.12);
         emitRipple(GOAL.x, GOAL.z, 1.5, PALE_COL); saveGame(); refreshHud();
+      } else if (d < 1.0 && !earned) {
+        // item 2: standing on the unearned goal used to do nothing at
+        // all. Now it refuses, once per approach (hysteresis on distance
+        // so it doesn't re-fire every frame while standing still).
+        if (!refusalActive) {
+          refusalActive = true; refusals++;
+          goalGutterT = t; blip(100, .22, .06, 'sine');
+          emitRipple(GOAL.x, GOAL.z, .55, new THREE.Color(0x334455));
+        }
+      } else if (d > 1.4) {
+        refusalActive = false;
       }
     }
   },
 
   constrain(prevX, prevZ, pos, vel, dt) {
-    // Rules stop dead at the region's own drawn extent — not a padded
-    // approximation of it. Without this a player standing in the open
-    // field between regions (e.g. z=-10, just past this region's z1=-11)
-    // used to catch an invisible wall or fall through an invisible hole
-    // that only ever existed *inside* Thin's bounds.
+    const t = clock.elapsedTime;
+
+    // item 1: seal the corridor's flanks. This runs BEFORE the
+    // `curRegion!==REGION` guard on purpose — the whole point of a flank
+    // is that it sits just outside `bounds` (z past z1 to the north, or
+    // past z0 to the south), so `curRegion` is never REGION out there and
+    // the guard below would never see it. Only x matters for *where* this
+    // applies (SEAL_X0..SEAL_X1, identical to the drawn side walls); the
+    // clamp itself only fires within SEAL_MARGIN of the real edge, so it
+    // can never reach into another region's bounds (Corner starts at
+    // z0=-9, two units north of BOUNDS.z1=-11).
+    if (pos.x >= SEAL_X0 && pos.x <= SEAL_X1) {
+      const loZ = BOUNDS.z0 + .5, hiZ = BOUNDS.z1 - .5;
+      if (pos.z > BOUNDS.z1 && pos.z <= BOUNDS.z1 + SEAL_MARGIN) {
+        pos.z = hiZ; if (vel.z > 0) vel.z *= -.2;
+        if (t - lastSealHit > .22) { lastSealHit = t; sealHits++; blip(150, .12, .08, 'triangle'); emitRipple(pos.x, pos.z, .8, PALE_COL); }
+      } else if (pos.z < BOUNDS.z0 && pos.z >= BOUNDS.z0 - SEAL_MARGIN) {
+        pos.z = loZ; if (vel.z < 0) vel.z *= -.2;
+        if (t - lastSealHit > .22) { lastSealHit = t; sealHits++; blip(150, .12, .08, 'triangle'); emitRipple(pos.x, pos.z, .8, PALE_COL); }
+      }
+    }
+
+    // Rules below stop dead at the region's own drawn extent — not a
+    // padded approximation of it. Without this a player standing in the
+    // open field between regions (e.g. z=-10, just past this region's
+    // z1=-11) used to catch an invisible wall or fall through an
+    // invisible hole that only ever existed *inside* Thin's bounds.
     if (curRegion !== REGION) return;
     if (pos.z < BOUNDS.z0 || pos.z > BOUNDS.z1) return;
-    const t = clock.elapsedTime;
 
     if (fallActive) {
       pos.copy(fallPos); vel.set(0, 0, 0);
@@ -413,20 +579,29 @@ const REGION = registerRegion({
         fallActive = false;
         pos.set(fallSide === 'near' ? GAP_NEAR - .4 : GAP_FAR + .4, 0, fallPos.z);
         vel.set(0, 0, 0);
-        flareT = t; flareSide = fallSide;
+        flareT = t; flareSide = fallSide; colCFlareT = t;
       }
       return;
     }
 
-    const wasOutsideGap = !(prevX >= GAP_NEAR && prevX <= GAP_FAR);
-    const nowInsideGap = pos.x >= GAP_NEAR && pos.x <= GAP_FAR;
-    if (nowInsideGap && wasOutsideGap) {
+    // item 5: containment is checked every frame the player is inside the
+    // gap's x-span, not only on the frame they crossed into it — a player
+    // who *stops* inside it (rather than running through) must still fall
+    // if they're full-size, not stand there in the hole.
+    const insideGap = pos.x >= GAP_NEAR && pos.x <= GAP_FAR;
+    if (insideGap) {
       if (flat > .8) {
-        pulseFlash(); emitRipple(pos.x, pos.z, 1.4, PALE_COL); slide(480, 760, .3, .07);
-        gapCrossed = true;
+        const wasOutsideGap = !(prevX >= GAP_NEAR && prevX <= GAP_FAR);
+        if (wasOutsideGap) {
+          pulseFlash(); emitRipple(pos.x, pos.z, 1.4, PALE_COL); slide(480, 760, .3, .07);
+          gapCrossed = true;
+        }
       } else {
         fallActive = true; fallT = 0; fallPos.copy(pos);
-        fallSide = prevX <= GAP_NEAR ? 'near' : 'far';
+        // whichever lip this entered from, if it's a genuine crossing this
+        // frame; otherwise (stopped inside, losing flatness in place) the
+        // nearer lip to where they're actually standing.
+        fallSide = prevX <= GAP_NEAR ? 'near' : prevX >= GAP_FAR ? 'far' : (pos.x <= (GAP_NEAR + GAP_FAR) / 2 ? 'near' : 'far');
         slide(300, 55, .5, .1); emitRipple(pos.x, pos.z, 1.3, FALL_COL);
         return;
       }
@@ -452,8 +627,9 @@ const REGION = registerRegion({
     setFlat(0); flatRaw = 0; flatVel = 0; wasSquashed = false; holdT = 0; extraBlipAt = -1;
     veilEl.style.opacity = '0'; lastVeilRaw = -1;
     const wePrompted = WALLS.some(w => w.promptOn);
-    for (const w of WALLS) { w.stuckT = 0; w.promptOn = false; }
+    for (const w of WALLS) { w.stuckT = 0; w.promptOn = false; w.alignStuckT = 0; w.hintOn = false; }
     if (wePrompted) setPrompt('');
+    refusalActive = false;
   },
 
   hud() { return { label: 'SLOTS', n: slotsPassed, total: WALLS.length }; },
@@ -474,9 +650,12 @@ const REGION = registerRegion({
       flat: +THREE.MathUtils.clamp(flatRaw, 0, 1.4).toFixed(2),
       holdT: +holdT.toFixed(2),
       cols: COLS.map(c => ({ x: c.x, z: c.z, r: c.r })),
-      walls: WALLS.map(w => ({ x: w.x, slotZ: w.slotZ, half: w.half, passed: w.passed })),
+      walls: WALLS.map(w => ({ x: w.x, slotZ: w.slotZ, half: w.half, passed: w.passed, hintOn: w.hintOn })),
       gap: { near: GAP_NEAR, far: GAP_FAR },
       goal: { x: GOAL.x, z: GOAL.z },
+      refusals, sealHits,
+      seal: { x0: SEAL_X0, x1: SEAL_X1, loZ: BOUNDS.z0 + .5, hiZ: BOUNDS.z1 - .5 },
+      colCFlareOn: clock.elapsedTime - colCFlareT < 2,
     };
   },
 });
