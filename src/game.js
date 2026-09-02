@@ -901,7 +901,7 @@ function updatePlayer(dt,t){
  // after the Corner: now and then a second, mirrored shadow; after the Lamp: the shadow is no longer quite black
  if(residue('corner')){mirrorT-=dt; if(mirrorT<-.18)mirrorT=3+Math.random()*4; pShadow2.visible=mirrorT<0; pShadow2.position.set(-.9,.02,.6);}
  else pShadow2.visible=false;
- if(!lampResidue&&residue('lamp')){lampResidue=true;pShadow.material.color.setHex(0x16222e);addAwake(.2);}
+ if(!lampResidue&&residue('lamp')){lampResidue=true;pShadow.material.color.setHex(0x16222e);addAwake(.15);}
  player.scale.setScalar(THREE.MathUtils.lerp(portraitMode()?1.5:1,1,sh));
  p3.rotation.y+=dt*(.7+awakened*1.8);
  pHalo.scale.setScalar(1+.08*Math.sin(performance.now()*.004));
