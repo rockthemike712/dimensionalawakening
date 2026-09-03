@@ -60,7 +60,7 @@ export function addAwake(k){awakened=Math.min(1,awakened+k);planeMat.uniforms.uA
 export const regions=[];
 export let curRegion=null;
 export function registerRegion(r){r.built=!r.build;r.visited=false;regions.push(r);return r;}
-export function regionAt(x,z){return regions.find(r=>r.bounds&&r.built&&(crossed?!r.page:r.page)&&x>=r.bounds.x0&&x<=r.bounds.x1&&z>=r.bounds.z0&&z<=r.bounds.z1)||null;}
+export function regionAt(x,z){return regions.find(r=>r.bounds&&r.built&&!(r.id==='room'&&S2.risePending)&&(crossed?!r.page:r.page)&&x>=r.bounds.x0&&x<=r.bounds.x1&&z>=r.bounds.z0&&z<=r.bounds.z1)||null;}
 // Act I is three rungs in order; the room is Act II and does not exist until they are done
 export const ACT1=['thin','corner','lamp'];
 const byId=id=>regions.find(r=>r.id===id);
@@ -698,11 +698,15 @@ export function startStage2(){
 }
 const _viewScratch=new THREE.Vector3();
 function crossingInView(){
+  const d=Math.hypot(playerPos.x-S2_BARX,playerPos.z);
+  if(d<4)return true;
+  if(playerPos.x>S2_BARX+2&&d<12&&looking()===0&&clock.elapsedTime-lookT>3)return true;   // behind you: the camera will turn to it
   const v=_viewScratch.set(S2_BARX,1,0).project(camera);
-  return v.z<1&&Math.abs(v.x)<.95&&v.y>-.95&&v.y<.95&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<34;
+  return v.z<1&&Math.abs(v.x)<.95&&v.y>-.95&&v.y<.95&&d<34;
 }
 function beginRise(){
   S2.risePending=false; S2.riseT=clock.elapsedTime;
+  if(playerPos.x>S2_BARX+2&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)>=4)lookBack(3.2);
   for(let z=-6;z<=6;z+=2)setTimeout(()=>emitRipple(S2_BARX,z,1.3),Math.abs(z)*90);
   depthChord();
 }
@@ -881,13 +885,13 @@ function updatePlayer(dt,t){
    if(playerPos.x<1.4){playerPos.x=1.4;velocity.x=Math.abs(velocity.x)*.3;}
  }
  // stage 2 wall: solid except at the two openings
- if(S2.active&&Math.abs(playerPos.z)<7&&(prevX-S2_BARX)*(playerPos.x-S2_BARX)<0){
+ if(S2.active&&!S2.risePending&&Math.abs(playerPos.z)<7&&(prevX-S2_BARX)*(playerPos.x-S2_BARX)<0){
    const inGap=Math.abs(playerPos.z-S2_GAPZ)<S2_GAPHW||Math.abs(playerPos.z+S2_GAPZ)<S2_GAPHW;
    if(!inGap){playerPos.x=prevX<S2_BARX?S2_BARX-.4:S2_BARX+.4;velocity.x*=-.25;}
  }
  // the far end of the room (edge, screen) is solid; you walk around it
- if(S2.active&&Math.abs(playerPos.z)<7&&prevX<=S2_SEAM2X-.3&&playerPos.x>S2_SEAM2X-.3){playerPos.x=S2_SEAM2X-.3;velocity.x*=-.25;}
- if(S2.active&&Math.abs(playerPos.z)<7&&prevX>=S2_SCRX+.6&&playerPos.x<S2_SCRX+.6){playerPos.x=S2_SCRX+.6;velocity.x*=-.25;}
+ if(S2.active&&!S2.risePending&&Math.abs(playerPos.z)<7&&prevX<=S2_SEAM2X-.3&&playerPos.x>S2_SEAM2X-.3){playerPos.x=S2_SEAM2X-.3;velocity.x*=-.25;}
+ if(S2.active&&!S2.risePending&&Math.abs(playerPos.z)<7&&prevX>=S2_SCRX+.6&&playerPos.x<S2_SCRX+.6){playerPos.x=S2_SCRX+.6;velocity.x*=-.25;}
  for(const r of regions)if(r.built&&r.constrain)r.constrain(prevX,prevZ,playerPos,velocity,dt);
  const here=regionAt(playerPos.x,playerPos.z);
  if(here!==curRegion){
