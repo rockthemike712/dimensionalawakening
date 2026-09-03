@@ -287,7 +287,7 @@ function updateDormant(){
 // actually standing on; these local offsets just keep the figure clear of
 // its own shadow at the group's local ground plane. ----------
 const ghostCore=new THREE.Mesh(new THREE.IcosahedronGeometry(.36,2),
-  new THREE.MeshStandardMaterial({color:0xdfffff,emissive:0x49e9ff,emissiveIntensity:3,roughness:.18,metalness:.15}));
+  new THREE.MeshStandardMaterial({color:0x2a4a5a,emissive:0x1c8aa0,emissiveIntensity:1.1,roughness:.5,metalness:.1}));   // the double is a dimmer, cooler you, not a second render of you
 const ghostHalo=new THREE.Mesh(new THREE.SphereGeometry(.6,20,20),
   new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.075,blending:THREE.AdditiveBlending,depthWrite:false}));
 ghostCore.position.y=.26; ghostHalo.position.y=.26;   // clear of the shadow at y=.02 — it was cutting the sphere at the equator
@@ -551,7 +551,7 @@ region = registerRegion({
     // own ~0.4-unit offset so the walk in, and standing at the gate, show it.
     const HINGE_HIDE=0.2;
     const nearHinge = Math.abs(playerPos.x-CX)<HINGE_HIDE || Math.abs(playerPos.z-CZ)<HINGE_HIDE;
-    ghost.visible=crossed && Math.max(fa,fb)>.05 && !(got1&&got2) && distX>1 && !nearHinge && ghostOnScreen;
+    ghost.visible=crossed && Math.max(fa,fb)>.05 && !(got1&&got2) && distX>.45 && !nearHinge && ghostOnScreen;
     _ghostDbg={distX:+distX.toFixed(2),nearHinge,onScreen:ghostOnScreen,
       ndc:{x:+_ghostProj.x.toFixed(2),y:+_ghostProj.y.toFixed(2),z:+_ghostProj.z.toFixed(2)},
       fa:+fa.toFixed(2),fb:+fb.toFixed(2)};

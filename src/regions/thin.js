@@ -425,7 +425,7 @@ const REGION = registerRegion({
   // whose forward vector carries almost no z-component (it looks down
   // +x, tilted only in y). Moved so column A is a couple of units ahead
   // in x as well as a little to the side: on screen from the first frame.
-  entrance: new THREE.Vector3(7, 0, -14),
+  entrance: new THREE.Vector3(7, 0, -16),   // on the corridor line: arrival faces column A and the first wall
   color: PALE,
 
   build() {
@@ -465,7 +465,7 @@ const REGION = registerRegion({
     // only applies once *already* reasonably flat (flatRaw>.5), so
     // approaching a wall at full size never flattens by proximity alone —
     // only a column does that.
-    if (flatRaw > .5) for (const w of WALLS) { if (!w.passed && Math.abs(playerPos.x - w.x) < 1.1) { insideAny = true; break; } }
+    if (flatRaw > .5) for (const w of WALLS) { if (!w.passed && Math.abs(playerPos.x - w.x) < 1.1 && Math.abs(playerPos.z - w.slotZ) < 3.5) { insideAny = true; break; } }
     holdT = insideAny ? HOLD_TIME : Math.max(0, holdT - dt);
     const target = (insideAny || holdT > 0) ? 1 : 0;
     stepSpring(target, dt);
@@ -564,11 +564,11 @@ const REGION = registerRegion({
     // crosses the line, and it puts them back on the side they came from.
     // Standing beside it, or walking past it in the Corner, changes nothing.
     // ...and the half-unit strip just outside either line cannot be walked east into the sealed span
-    if (prevX < SEAL_X0 && pos.x >= SEAL_X0 && (pos.z > BOUNDS.z1 && pos.z < BOUNDS.z1 + .6 || pos.z < BOUNDS.z0 && pos.z > BOUNDS.z0 - .6)) {
+    if (!goalReached && prevX < SEAL_X0 && pos.x >= SEAL_X0 && (pos.z > BOUNDS.z1 && pos.z < BOUNDS.z1 + .6 || pos.z < BOUNDS.z0 && pos.z > BOUNDS.z0 - .6)) {
       pos.x = SEAL_X0 - .05; vel.x *= -.2;
       if (t - lastSealHit > .22) { lastSealHit = t; sealHits++; blip(150, .12, .08, 'triangle'); emitRipple(pos.x, pos.z, .8, PALE_COL); }
     }
-    if (pos.x >= SEAL_X0 && pos.x <= SEAL_X1 && (prevX >= SEAL_X0 - .6 && prevX <= SEAL_X1 + .6)) {
+    if (!goalReached && pos.x >= SEAL_X0 && pos.x <= SEAL_X1 && (prevX >= SEAL_X0 - .6 && prevX <= SEAL_X1 + .6)) {   // a finished region stops sealing: the goal is taken, there is nothing left to skip
       for (const zLine of SEAL_LINES) {
         const a = prevZ - zLine, b = pos.z - zLine;
         if (a * b < 0 || (b === 0 && a !== 0)) {
