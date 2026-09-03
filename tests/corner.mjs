@@ -57,12 +57,29 @@ await page.evaluate(()=>window.__DA.setPos(17,0)); await page.waitForTimeout(100
     errors.push('a pull from outside GRAB_R changed the corner: '+JSON.stringify(after.state));
 }
 
-// item 2: the entrance now sits ON the crossing — walk there.
+// walk to the crossing (the entrance itself now sits 5.5 units back along x
+// and off the z=0 line — see finding 1/10 below — but the beacon still
+// leads here, and this is the spot every drag actually needs).
 await driveTo(27,0);
 { const p=await page.evaluate(()=>window.__DA.pos); const d=Math.hypot(p[0]-27,p[2]-0);
-  console.log('pos at the entrance:',JSON.stringify(p));
-  if(d>1)errors.push('walking to the entrance did not land on the crossing (d='+d.toFixed(2)+')'); }
+  console.log('pos at the crossing:',JSON.stringify(p));
+  if(d>1)errors.push('walking to the crossing did not land on it (d='+d.toFixed(2)+')'); }
 await page.screenshot({path:'shots/corner-0-arrive.png'});
+
+// finding 1: standing on the crossing, the entrance light (now at
+// (21.5,0,3), 5.5 units back and off the hinge lines) must read as small
+// and behind the player, not a giant hoop across the bottom of the screen
+// at their own feet. Not in the bottom third of a 390x844 frame — and in
+// practice, since it's now behind the chase camera entirely from here, its
+// raw projection lands far outside the frame altogether, which trivially
+// satisfies "not in the bottom third" (a point outside [0,390] on x is not
+// meaningfully "in" any third of the screen).
+{
+  const proj=await page.evaluate(()=>window.__DA.project(21.5,0.5,3));
+  console.log('entrance projection standing on the crossing:',JSON.stringify(proj));
+  const onscreenX = proj.x>=0 && proj.x<=390;
+  if(onscreenX && proj.y>560) errors.push('the entrance ring reads in the bottom third of the screen from the crossing: '+JSON.stringify(proj));
+}
 
 // item 5: the grab tie-break at the crossing must not coin-flip on distance.
 // A pointerdown exactly on the intersection followed by a clear vertical
@@ -81,6 +98,48 @@ await page.screenshot({path:'shots/corner-0-arrive.png'});
   await tapEdge('A'); await page.waitForTimeout(1000);   // unfold before the rest of the tests
   s=await st(); if(s.state.foldA>.05||s.state.foldB>.05)errors.push('could not unfold after the tie-break test: '+JSON.stringify(s.state));
 }
+
+// finding 2: a fresh B->A latch, right from the taught standing spot (the
+// crossing itself — GRAB_R's own safety, finding 6, settles a parked
+// player to (26.3,-0.7)) — the B->A gate must be visible on screen for at
+// least a full second afterward, with no camera swing (there is none: the
+// old lookBack() call is gone, see corner.js). Sampled every real render
+// frame via a page-side requestAnimationFrame recorder rather than sparse
+// polling from here, which could straddle the whole window between two
+// samples and miss a problem (this is finding 9's point, addressed at the
+// root: since the fix is a *position* the camera already sees under a
+// normal forward-facing view, not a swing timed against a latch, there is
+// no flag to go stale — the recorder below is instantiated fresh every
+// time this block runs, so "cleared on each fresh latch" holds by
+// construction). Run twice (unfold, refold) to demonstrate that directly.
+async function checkGateVisibleForASecond(label){
+  const samples = await page.evaluate(async () => {
+    const out = [];
+    const t0 = performance.now();
+    function frame(){
+      const g = window.__DA_corner.gateRenderPos(2);
+      const p = window.__DA.project(g.x, g.y, g.z);
+      out.push({x:+p.x.toFixed(1), y:+p.y.toFixed(1)});
+      if(performance.now()-t0 < 1250) requestAnimationFrame(frame);
+    }
+    return new Promise(res=>{ requestAnimationFrame(frame); setTimeout(()=>res(out), 1300); });
+  });
+  const inFrame = samples.filter(s=>s.x>=0&&s.x<=390&&s.y>=60&&s.y<=700);
+  console.log(label,'gate2 on-screen frames:',inFrame.length,'/',samples.length,'first:',JSON.stringify(samples[0]));
+  if(samples.length<5) errors.push(label+': too few frames captured to judge ('+samples.length+')');
+  if(inFrame.length<samples.length) errors.push(label+': gate2 left the frame during the sustained-visibility window — '+inFrame.length+'/'+samples.length+' frames on-screen');
+}
+await page.evaluate(()=>window.__DA.setPos(27,0)); await page.waitForTimeout(300);
+await dragEdge('B'); await dragEdge('A');
+s=await st(); if(s.state.foldA<.9||s.state.foldB<.9||s.state.order!==1)errors.push('could not latch B->A fresh at the crossing: '+JSON.stringify(s.state));
+await checkGateVisibleForASecond('fresh B->A latch');
+await tapEdge('B'); await tapEdge('A'); await page.waitForTimeout(1000);   // unfold, then do it again — a second, independent fresh latch
+await page.evaluate(()=>window.__DA.setPos(27,0)); await page.waitForTimeout(300);
+await dragEdge('B'); await dragEdge('A');
+s=await st(); if(s.state.foldA<.9||s.state.foldB<.9||s.state.order!==1)errors.push('could not re-latch B->A for the second visibility check: '+JSON.stringify(s.state));
+await checkGateVisibleForASecond('second, independent B->A latch');
+await tapEdge('B'); await tapEdge('A'); await page.waitForTimeout(1000);   // unfold before the rest of the tests
+s=await st(); if(s.state.foldA>.05||s.state.foldB>.05)errors.push('could not unfold after the visibility checks: '+JSON.stringify(s.state));
 
 // item 1: the order flag must track the *actual* fold sequence, including a
 // tap-off/tap-on toggle with the other edge still up. Do this off the
@@ -101,19 +160,10 @@ await tapEdge('A');   // tap back on, with B still up — the newly raised edge 
 s=await st(); console.log('after tap-off/tap-on A with B still up:',JSON.stringify(s.state));
 if(s.state.order!==1)errors.push('re-raising A while B is still up must flip the order to B-first (1), got '+s.state.order);
 
-// item 1: this is a fresh B->A latch — its own gate lands behind and above
-// the crossing, off the bottom of the frame under the normal forward-facing
-// camera. lookBack() should swing the camera round for a moment so the
-// arrival is actually seen. The region itself tracks whether the gate's
-// projection ever actually lands inside the frame every real render frame
-// (see sawLookback2 in corner.js's update()), checked below once more real
-// time has passed — the on-screen window mid-swing is brief, and under an
-// irregular headless frame rate the handful of frames that actually render
-// can land entirely outside it; the flag is sticky, so any later point
-// gives every frame rendered since the latch a chance to have caught it.
-await page.waitForTimeout(700);   // partway through the 1.2s swing, for the screenshot below
-await page.screenshot({path:'shots/corner-1b-lookback.png'});
-await page.waitForTimeout(1200);   // let the rest of the swing finish and settle
+// no camera swing here (finding 2 removed lookBack entirely) — just let the
+// spring settle after the toggle.
+await page.waitForTimeout(1900);
+await page.screenshot({path:'shots/corner-1b-both-up-toggled.png'});
 
 s=await st(); console.log('settled after the toggle:',JSON.stringify(s.state));
 if(!s.state.marker2On||s.state.marker1On)errors.push('the live marker did not follow the toggled order: '+JSON.stringify(s.state));
@@ -139,26 +189,25 @@ await page.screenshot({path:'shots/corner-2-both-pulled.png'});
   if(offFrame>0)errors.push(offFrame+' of '+pts.length+' ghost positions projected outside the 390x844 frame');
   await page.evaluate(()=>window.__DA.setPos(24,-4)); await page.waitForTimeout(300);
   await page.screenshot({path:'shots/corner-3-ghost.png'});
-  await page.evaluate(()=>window.__DA.setPos(27,0.4)); await page.waitForTimeout(300);
+  // (27,-0.4), not (27,+0.4): parked here with both hinges latched, finding
+  // 6's own hinge-safety (still gated on low velocity, so it applies to a
+  // stationary player) settles this to (26.3,side*0.7) — and +0.7 on z
+  // lands 1.63 units from gate 2's own, now much closer rest spot (finding
+  // 3, GATE2_REST), inside COLLECT_R, collecting it by accident before the
+  // deliberate approach below ever runs. -0.7 lands 1.92 units away, safe.
+  await page.evaluate(()=>window.__DA.setPos(27,-0.4)); await page.waitForTimeout(300);
   const hiddenNearCrossing=await page.evaluate(()=>window.__DA_corner.ghost());
   if(hiddenNearCrossing.visible)errors.push('the mirrored self should hide within 1 unit of the crossing: '+JSON.stringify(hiddenNearCrossing));
+  { const st2=await st(); if(st2.state.got2)errors.push('standing near the crossing to test ghost-hiding collected gate 2 by accident: '+JSON.stringify(st2.state)); }
 }
 
-// wrong light / correct light for this order (B first, A second) — the far
-// gate for order 1 sits ~5.3 units out, so this doesn't auto-collect just by
-// standing near the crossing, unlike order 0 below. The two order-1 gates
-// (~1.6 units apart) sit close enough to each other that walking right onto
-// the wrong one's exact coordinates would also land inside the correct
-// one's own COLLECT_R — so approach it from the side facing away from the
-// correct gate, close enough to trip the wrong-light check without also
-// walking into the right one by accident.
-await driveTo(27,0);
-
-// item 1 (assertion): by now every frame since the B->A latch above has had
-// a chance to catch the gate on screen during its look-back swing.
-s=await st(); console.log('sawLookback2 by now:',s.state.sawLookback2);
-if(!s.state.sawLookback2)errors.push('the B->A gate never projected inside the frame during the look-back');
-
+// wrong light / correct light for this order (B first, A second) — gate 1
+// (wrong, for order 1) and gate 2 (correct) both sit a couple of units from
+// the crossing now (findings 2/3). Stay put at (24,-2) rather than walking
+// back to the crossing here — that walk would pass close enough to gate 2's
+// own delivered position (2.32 units from the crossing) to collect it in
+// transit, before the test ever gets to its deliberate approach below.
+//
 // item 2 (converse): a live, uncollected gate for the current order must
 // never trip the dead-end prompt, no matter how long the player lingers —
 // only the *absence* of a live gate for the order should ever do that.
@@ -187,10 +236,15 @@ if(s.state.got1)errors.push('the wrong light collected');
 if(s.state.got2)errors.push('the correct light was collected by accident while testing the wrong one');
 if(wrongAfter<=wrongBefore)errors.push('walking to the wrong light gave no feedback (wrongTouches unchanged)');
 const l2=await page.evaluate(()=>window.__DA_corner.light(2));
+const wrongBeforeCorrect=await page.evaluate(()=>window.__DA_corner.wrongTouches);
 await driveTo(l2.x,l2.z); await page.waitForTimeout(800);
 s=await st(); console.log('after walking into the correct light (order 1):',JSON.stringify(s.state));
 if(!s.state.got2)errors.push('light 2 (B->A) not collected');
 if(s.state.foldA>.2||s.state.foldB>.2)errors.push('collecting did not spring the paper back open: '+JSON.stringify(s.state));
+// walking straight into the *correct* light must never itself add a wrong
+// touch, however close the two gates sit to one another at this order.
+const wrongAfterCorrect=await page.evaluate(()=>window.__DA_corner.wrongTouches);
+if(wrongAfterCorrect!==wrongBeforeCorrect)errors.push('walking into the correct B->A light added a wrong touch: '+wrongBeforeCorrect+' -> '+wrongAfterCorrect);
 
 // item 3: the dormant marker — once one gate is collected, the *other*
 // one's rest spot should read as present but cold, regardless of what the
@@ -225,32 +279,32 @@ await tapEdge('B'); await tapEdge('A'); await page.waitForTimeout(1000);   // un
   s=await st(); if(s.state.foldA>.05||s.state.foldB>.05)errors.push('could not unfold after the dead-end test: '+JSON.stringify(s.state));
 }
 
-// items 2 + 6: order A->B, latched right at the crossing. Its own gate sits
-// ~0.4 units out — well inside COLLECT_R — so simply finishing the second
-// (B) drag collects it *while the pointer is still down*. That is exactly
-// the "collecting mid-drag" bug: the drag must not half-restore afterward.
+// finding 3: order A->B, latched right at the crossing. Its gate used to
+// sit ~0.4 units out — well inside COLLECT_R — so simply finishing the
+// second (B) drag collected it *while the pointer was still down*, and the
+// corner's arrival was never seen. Moved to 2.38 units out: the latch must
+// NOT collect it — the delivery is watched, sitting there uncollected,
+// marker lit — and it is collected only once the player actually walks in.
 await driveTo(27,0);
 s=await st(); if(s.state.foldA>.05||s.state.foldB>.05)errors.push('folds were not at rest before the A->B test: '+JSON.stringify(s.state));
-// item 4: gate 2's own path sweeps within ~0.6 units of the crossing while
-// B is mid-fold here (checked by sampling warp() along the sweep) — a clean
-// A->B collect must produce zero wrong-touch blips despite that.
 const wrongBeforeClean=await page.evaluate(()=>window.__DA_corner.wrongTouches);
 await dragEdge('A'); s=await st(); if(s.state.foldA<.9||s.state.order!==0)errors.push('edge A did not latch fresh at the crossing: '+JSON.stringify(s.state));
+await dragEdge('B');
+s=await st(); console.log('immediately after the A->B latch:',JSON.stringify(s.state));
+if(s.state.foldA<.9||s.state.foldB<.9)errors.push('A->B did not fully latch: '+JSON.stringify(s.state));
+if(s.state.got1)errors.push('the A->B gate collected itself at the latch instead of being walked into: '+JSON.stringify(s.state));
+if(!s.state.marker1On)errors.push('the delivered A->B gate has no live marker to walk to: '+JSON.stringify(s.state));
+await page.screenshot({path:'shots/corner-6a-AB-delivered-uncollected.png'});
 {
-  const p=await edgePoint('B');
-  await page.mouse.move(p.x,p.y); await page.mouse.down();
-  await page.mouse.move(p.x-260,p.y,{steps:20});
-  const mid=await st();
-  console.log('mid-drag B, pointer still down:',JSON.stringify(mid.state));
-  await page.waitForTimeout(2000);   // hold, finger still down, well past the chime
-  await page.mouse.up(); await page.waitForTimeout(700);
-  s=await st(); console.log('after holding through the collect, then releasing:',JSON.stringify(s.state));
-  if(!s.state.got1)errors.push('light 1 (A->B) was not collected mid-drag: '+JSON.stringify(s.state));
-  if(s.state.foldA>.15||s.state.foldB>.15)errors.push('the paper stayed half-folded after a mid-drag collect: '+JSON.stringify(s.state));
+  const g1=await page.evaluate(()=>window.__DA_corner.light(1));
+  await driveTo(g1.x,g1.z); await page.waitForTimeout(600);
+  s=await st(); console.log('after walking into the A->B gate:',JSON.stringify(s.state));
+  if(!s.state.got1)errors.push('light 1 (A->B) was not collected on walking in: '+JSON.stringify(s.state));
+  if(s.state.foldA>.15||s.state.foldB>.15)errors.push('the paper stayed half-folded after collecting: '+JSON.stringify(s.state));
 }
 const wrongAfterClean=await page.evaluate(()=>window.__DA_corner.wrongTouches);
-console.log('wrongTouches across the clean A->B collect:',wrongBeforeClean,'->',wrongAfterClean);
-if(wrongAfterClean!==wrongBeforeClean)errors.push('a clean A->B collect produced a wrong-touch blip: '+wrongBeforeClean+' -> '+wrongAfterClean);
+console.log('wrongTouches across the clean A->B latch + walk-in:',wrongBeforeClean,'->',wrongAfterClean);
+if(wrongAfterClean!==wrongBeforeClean)errors.push('a clean A->B latch and walk-in produced a wrong-touch blip: '+wrongBeforeClean+' -> '+wrongAfterClean);
 if(!(await st()).done)errors.push('region not done after both lights');
 await page.screenshot({path:'shots/corner-6-done.png'});
 
