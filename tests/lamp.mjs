@@ -103,7 +103,7 @@ async function freshPage(){
 // this revision only ever touches src/regions/lamp.js ----
 const daKeys=await page.evaluate(()=>Object.keys(window.__DA).sort());
 const EXPECTED_DA=['actDone','applySave','arrow','clearSave','counterShown','crossed','dim','digest','digested',
-  'flat','fold','grown','jump3d','lm','loadSave','moves','next','pos','project','region','regions','roomFold',
+  'flat','fold','grown','jump3d','lm','loadSave','moves','next','pos','project','region','regions','residue','roomFold',
   'rings','s2','s2round','s2start','save','setPos','seeds','tapLm','tps','unlockRoom','_lm','_plane'].sort();
 const extra=daKeys.filter(k=>!EXPECTED_DA.includes(k));
 console.log('__DA keys:',daKeys.join(','));
