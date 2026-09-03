@@ -144,11 +144,12 @@ const GOAL = new THREE.Vector3(27.6, 0, CZ);
 // so this never reaches into another region's territory.
 const SEAL_X0 = WALLS[0].x - .5;         // 10.5 — wall A's entrance margin
 const SEAL_X1 = GOAL.x + 2;              // 29.6 — just past the goal
-const SEAL_MARGIN = 2;
+const SEAL_LINES = [BOUNDS.z1, BOUNDS.z0];   // the two flank lines the seal blocks a crossing of
 
 // hoisted: `for...of ['rimNear','rimFar']` was reallocating this array
 // every in-region frame of the whole game.
 const RIM_KEYS = ['rimNear', 'rimFar'];
+const SIDE_KEYS = ['north', 'south'];
 
 let slotsPassed = 0, goalReached = false, wallHits = 0, gapCrossed = false;
 let flatRaw = 0, flatVel = 0, wasSquashed = false, holdT = 0;
@@ -158,6 +159,8 @@ let flareT = -99, flareSide = null;      // rim flare on put-back
 let colCFlareT = -99;                    // column C's ring flare on put-back (item 4)
 let extraBlipAt = -1;                    // game-time-scheduled overshoot tick
 let goalLightGroup = null;
+const hintQueue = [];                        // ripples scheduled along a wall (game time, no timers)
+const DIM_COL = new THREE.Color(0x334455), HINT_COL = new THREE.Color(0xffffff);
 let goalGutterT = -99;                   // the core dips for a moment on a refusal (item 2)
 let refusals = 0, refusalActive = false; // once per approach, standing on the goal unearned
 let lastSealHit = -99, sealHits = 0;     // item 1's thud+ripple, debounced
@@ -241,16 +244,16 @@ function buildWall(w) {
     ribZs.forEach((z, i) => { m.makeTranslation(w.x, 1.2, z); ribs.setMatrixAt(i, m); });
     g.add(ribs);
   }
-  const postMat = new THREE.MeshBasicMaterial({ color: 0xdfffff });
+  const posts = [];
   const rails = [];
   const railMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .55, blending: THREE.AdditiveBlending, depthWrite: false });
   for (const sz of [w.slotZ - w.half, w.slotZ + w.half]) {
-    const p = new THREE.Mesh(new THREE.CylinderGeometry(.035, .035, 2.4, 8), postMat);
+    const p = new THREE.Mesh(new THREE.CylinderGeometry(.035, .035, 2.4, 8), new THREE.MeshBasicMaterial({ color: 0xdfffff, transparent: true, opacity: .6 })); posts.push(p);
     p.position.set(w.x, 1.2, sz); g.add(p);
     const rail = new THREE.Mesh(new THREE.BoxGeometry(.5, .04, .06), railMat.clone());
     rail.position.set(w.x, .04, sz); g.add(rail); rails.push(rail);
   }
-  world.add(g); w.mesh = { g, rails };
+  world.add(g); w.mesh = { g, rails, posts };
 }
 
 // A side wall closes one flank of the corridor: a low luminous rail at
@@ -261,8 +264,8 @@ function buildWall(w) {
 function buildSideWall(zLine) {
   const g = new THREE.Group();
   const width = SEAL_X1 - SEAL_X0, midX = (SEAL_X0 + SEAL_X1) / 2;
-  const panel = new THREE.Mesh(new THREE.BoxGeometry(width, 1.7, .16),
-    new THREE.MeshBasicMaterial({ color: 0x49c8e8, transparent: true, opacity: .3, side: THREE.DoubleSide }));
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(width, 1.2, .1),
+    new THREE.MeshBasicMaterial({ color: 0x2b6f8a, transparent: true, opacity: .16, side: THREE.DoubleSide, depthWrite: false }));
   panel.position.set(midX, .95, zLine); g.add(panel);
   const rail = new THREE.Mesh(new THREE.BoxGeometry(width, .1, .1),
     new THREE.MeshBasicMaterial({ color: 0xeafeff, transparent: true, opacity: .8, blending: THREE.AdditiveBlending, depthWrite: false }));
@@ -341,17 +344,19 @@ function animateCosmetics(t, inRegion) {
       c.mesh.core.intensity = Math.max(c.mesh.core.intensity, 9 + colCFlare * 14);
     }
   }
+  while (hintQueue.length && hintQueue[0].at <= t) { const h = hintQueue.shift(); emitRipple(h.x, h.z, h.strong ? 1.1 : .6, HINT_COL); }
   for (const w of WALLS) {
     if (!w.mesh) continue;
-    // item 3: while a flat player is stuck off the slot, the rails run
-    // brighter and faster than the idle shimmer — a direction, not a word.
+    // while a flat player is stuck off the slot, the slot itself is the brightest thing on the wall:
+    // the rails run bright and fast and grow tall, the posts light up
     let op = w.passed ? .3 : .55 + .25 * Math.sin(t * 3.2);
+    const hintK = w.hintOn ? .7 + .3 * Math.sin(t * 8) : 0;
     if (w.hintOn) op = .85 + .15 * Math.sin(t * 8);
-    for (const r of w.mesh.rails) r.material.opacity = op;
+    for (const r of w.mesh.rails) { r.material.opacity = op; r.scale.y = 1 + hintK * 6; r.position.y = .04 + hintK * .18; }
+    if (w.mesh.posts) for (const pst of w.mesh.posts) pst.material.opacity = .6 + hintK * .4;
   }
-  // item 1: the sealed flanks read as a real edge, not just a rule —
-  // a faint shimmer keeps them from looking like static geometry.
-  for (const key of ['north', 'south']) {
+  // the sealed flanks: a faint shimmer on the rail keeps them from looking like static geometry
+  for (const key of SIDE_KEYS) {
     const sw = sideWalls[key]; if (!sw) continue;
     sw.rail.material.opacity = .6 + .2 * Math.sin(t * 1.6 + (key === 'north' ? 0 : Math.PI));
   }
@@ -379,7 +384,7 @@ function animateGoalLight(t, inRegion, earned) {
   goalLightGroup.rotation.y = t * .5;
   // item 2: an unearned refusal dips the core for a moment — the world's
   // way of saying "not yet" without a word.
-  const gutter = t - goalGutterT < .5 ? 1 - (t - goalGutterT) / .5 : 0;
+  const gutter = t - goalGutterT < 1.0 ? 1 - (t - goalGutterT) / 1.0 : 0;
   if (u.ring) { u.ring.rotation.z = t * .25; u.ring.material.opacity = earned ? .65 : Math.max(.04, .2 - gutter * .16); }
   if (u.core) u.core.material.emissiveIntensity = earned ? 4 : Math.max(.25, 1.1 - gutter * .85);
   if (u.beam) { u.beam.visible = earned; if (earned) u.beam.material.opacity = .13 + .10 * (.5 + .5 * Math.sin(t * 3.2)); }
@@ -460,7 +465,7 @@ const REGION = registerRegion({
     // only applies once *already* reasonably flat (flatRaw>.5), so
     // approaching a wall at full size never flattens by proximity alone —
     // only a column does that.
-    if (flatRaw > .5 && WALLS.some(w => !w.passed && Math.abs(playerPos.x - w.x) < 1.1)) insideAny = true;
+    if (flatRaw > .5) for (const w of WALLS) { if (!w.passed && Math.abs(playerPos.x - w.x) < 1.1) { insideAny = true; break; } }
     holdT = insideAny ? HOLD_TIME : Math.max(0, holdT - dt);
     const target = (insideAny || holdT > 0) ? 1 : 0;
     stepSpring(target, dt);
@@ -506,8 +511,10 @@ const REGION = registerRegion({
         // while the player stays stuck — a direction, not a word.
         if (w.hintOn && t - w.lastHint > .9) {
           w.lastHint = t;
-          const dir = Math.sign(w.slotZ - playerPos.z) || 1;
-          emitRipple(w.x, playerPos.z + dir * .6, .7, new THREE.Color(0xffffff));
+          // three rings stepping along the wall from the player to the slot, then one at the slot itself
+          const dz = w.slotZ - playerPos.z;
+          for (let k = 1; k <= 3; k++) { const zz = playerPos.z + dz * (k / 3); hintQueue.push({ x: w.x, z: zz, at: t + k * .12 }); }
+          hintQueue.push({ x: w.x, z: w.slotZ, at: t + .5, strong: true });
           blip(520, .09, .05, 'sine', (playerPos.z - w.slotZ) / 6);
         }
       } else {
@@ -526,16 +533,16 @@ const REGION = registerRegion({
       if (d < 1.0 && earned) {
         goalReached = true; chime(); addAwake(.12);
         emitRipple(GOAL.x, GOAL.z, 1.5, PALE_COL); saveGame(); refreshHud();
-      } else if (d < 1.0 && !earned) {
+      } else if (d < 2.0 && !earned) {
         // item 2: standing on the unearned goal used to do nothing at
         // all. Now it refuses, once per approach (hysteresis on distance
         // so it doesn't re-fire every frame while standing still).
         if (!refusalActive) {
           refusalActive = true; refusals++;
           goalGutterT = t; blip(100, .22, .06, 'sine');
-          emitRipple(GOAL.x, GOAL.z, .55, new THREE.Color(0x334455));
+          emitRipple(GOAL.x, GOAL.z, .55, DIM_COL);
         }
-      } else if (d > 1.4) {
+      } else if (d > 2.6) {
         refusalActive = false;
       }
     }
@@ -553,14 +560,21 @@ const REGION = registerRegion({
     // clamp itself only fires within SEAL_MARGIN of the real edge, so it
     // can never reach into another region's bounds (Corner starts at
     // z0=-9, two units north of BOUNDS.z1=-11).
-    if (pos.x >= SEAL_X0 && pos.x <= SEAL_X1) {
-      const loZ = BOUNDS.z0 + .5, hiZ = BOUNDS.z1 - .5;
-      if (pos.z > BOUNDS.z1 && pos.z <= BOUNDS.z1 + SEAL_MARGIN) {
-        pos.z = hiZ; if (vel.z > 0) vel.z *= -.2;
-        if (t - lastSealHit > .22) { lastSealHit = t; sealHits++; blip(150, .12, .08, 'triangle'); emitRipple(pos.x, pos.z, .8, PALE_COL); }
-      } else if (pos.z < BOUNDS.z0 && pos.z >= BOUNDS.z0 - SEAL_MARGIN) {
-        pos.z = loZ; if (vel.z < 0) vel.z *= -.2;
-        if (t - lastSealHit > .22) { lastSealHit = t; sealHits++; blip(150, .12, .08, 'triangle'); emitRipple(pos.x, pos.z, .8, PALE_COL); }
+    // A wall, not a magnet: it only acts when the player's step actually
+    // crosses the line, and it puts them back on the side they came from.
+    // Standing beside it, or walking past it in the Corner, changes nothing.
+    // ...and the half-unit strip just outside either line cannot be walked east into the sealed span
+    if (prevX < SEAL_X0 && pos.x >= SEAL_X0 && (pos.z > BOUNDS.z1 && pos.z < BOUNDS.z1 + .6 || pos.z < BOUNDS.z0 && pos.z > BOUNDS.z0 - .6)) {
+      pos.x = SEAL_X0 - .05; vel.x *= -.2;
+      if (t - lastSealHit > .22) { lastSealHit = t; sealHits++; blip(150, .12, .08, 'triangle'); emitRipple(pos.x, pos.z, .8, PALE_COL); }
+    }
+    if (pos.x >= SEAL_X0 && pos.x <= SEAL_X1 && (prevX >= SEAL_X0 - .6 && prevX <= SEAL_X1 + .6)) {
+      for (const zLine of SEAL_LINES) {
+        const a = prevZ - zLine, b = pos.z - zLine;
+        if (a * b < 0 || (b === 0 && a !== 0)) {
+          pos.z = a > 0 ? zLine + .35 : zLine - .35; vel.z *= -.2;
+          if (t - lastSealHit > .22) { lastSealHit = t; sealHits++; blip(150, .12, .08, 'triangle'); emitRipple(pos.x, pos.z, .8, PALE_COL); }
+        }
       }
     }
 
@@ -577,7 +591,7 @@ const REGION = registerRegion({
       fallT += dt;
       if (fallT >= .6) {
         fallActive = false;
-        pos.set(fallSide === 'near' ? GAP_NEAR - .4 : GAP_FAR + .4, 0, fallPos.z);
+        pos.set(fallSide === 'near' ? GAP_NEAR - 1.0 : GAP_FAR + 1.0, 0, fallPos.z);
         vel.set(0, 0, 0);
         flareT = t; flareSide = fallSide; colCFlareT = t;
       }
@@ -608,7 +622,7 @@ const REGION = registerRegion({
     }
 
     for (const w of WALLS) {
-      const crossing = (prevX - w.x) * (pos.x - w.x) < 0;
+      const crossing = (prevX - w.x) * (pos.x - w.x) <= 0 && prevX !== pos.x && !(prevX === w.x && pos.x === w.x);
       if (!crossing) continue;
       const allowed = flat > .8 && Math.abs(pos.z - w.slotZ) < w.half;
       if (allowed) {

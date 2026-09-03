@@ -234,47 +234,50 @@ if (st.slotsPassed !== 0) errors.push('slotsPassed advanced without ever passing
   if (s.sealHits > 0) errors.push('the seal fired west of its own span (x<' + s.seal.x0 + ') — sealHits=' + s.sealHits);
 }
 {
-  // east of wall A, z=-10 sits inside the sealed span (SEAL_X0..SEAL_X1):
-  // this used to reach x>=26.2 free (the exact second-review repro this
-  // test used to run). It must not any more.
+  // z=-10 is open field between Thin and the Corner: the seal is a wall on the
+  // line z=-11, never a pull. Walking east along z=-10 must be free and must
+  // never enter the region.
   await setPos(20, -10);
   await page.waitForTimeout(120);
   const run = await walk('ArrowUp', { untilX: x => x >= 26.2, maxMs: 8000 });
-  const s = await thinState();
-  console.log('sealed-flank run from (20,-10): x=' + run.x.toFixed(2) + ' sealHits=' + s.sealHits);
-  if (run.x >= 26.0) errors.push('the sealed flank did not stop the old (20,-10) open-field bypass (reached x=' + run.x.toFixed(2) + ')');
-  if (s.sealHits <= 0) errors.push('walking the sealed flank at z=-10 never registered a seal hit (sealHits=' + s.sealHits + ')');
+  const s = await thinState(); const reg = await page.evaluate(() => window.__DA.region);
+  console.log('open-field run along z=-10: x=' + run.x.toFixed(2) + ' z=' + run.z.toFixed(2) + ' region=' + reg + ' sealHits=' + s.sealHits);
+  if (run.x < 26.0) errors.push('walking the open field at z=-10 was stopped (x=' + run.x.toFixed(2) + ')');
+  if (run.z < -10.9) errors.push('the seal pulled the player inside from z=-10 (z=' + run.z.toFixed(2) + ')');
+  if (reg === 'thin') errors.push('walking at z=-10 put the player inside Thin');
 }
 
-// ---- item 1's two named repros: both must end blocked, with a thud
-// (debug().sealHits) and a ripple. ----
+// ---- the two flank repros: a crossing of the line is blocked, from either side, with a thud and a ripple ----
 {
-  // north: setPos(27.6,-9.5) holding ArrowLeft used to walk straight over
-  // the goal without ever touching a wall or the gap. The seal now pulls
-  // z back inside bounds on the very first frame; the player still ends
-  // up on the goal's own tile (nothing at x=27.6 stops pure -z motion),
-  // but standing there unearned now refuses (item 2) rather than
-  // completing or silently doing nothing.
-  const refusalsBefore = (await thinState()).refusals;
-  await setPos(27.6, -9.5); // due south of the goal (27.6,-16), just outside the region's z1=-11
-  await page.waitForTimeout(120);
-  await page.keyboard.down('ArrowLeft'); // -z, straight toward the goal
+  // north: from (27.6,-9.5) holding ArrowLeft (-z) toward the goal: stopped at the line, never inside
+  await setPos(27.6, -9.5);
+  await page.waitForTimeout(400);
+  let pos = await sample(); const reg0 = await page.evaluate(() => window.__DA.region);
+  if (Math.abs(pos.z + 9.5) > .05) errors.push('standing beside the flank moved the player (z=' + pos.z.toFixed(2) + ')');
+  if (reg0 === 'thin') errors.push('standing at (27.6,-9.5) counted as inside Thin');
+  await page.keyboard.down('ArrowLeft');
   await page.waitForTimeout(3500);
   await page.keyboard.up('ArrowLeft');
   await page.waitForTimeout(200);
   const s = await thinState();
   const done = await thinDone();
-  const pos = await sample();
-  console.log('north-flank repro: pos=(' + pos.x.toFixed(2) + ',' + pos.z.toFixed(2) + ') slotsPassed=' + s.slotsPassed
-    + ' gapCrossed=' + s.gapCrossed + ' sealHits=' + s.sealHits + ' refusals=' + s.refusals + ' done=' + done);
+  pos = await sample(); const reg = await page.evaluate(() => window.__DA.region);
+  console.log('north-flank repro: pos=(' + pos.x.toFixed(2) + ',' + pos.z.toFixed(2) + ') region=' + reg + ' slotsPassed=' + s.slotsPassed
+    + ' gapCrossed=' + s.gapCrossed + ' sealHits=' + s.sealHits + ' done=' + done);
+  if (pos.z < -11) errors.push('the north flank let the player cross the line (z=' + pos.z.toFixed(2) + ')');
+  if (reg === 'thin') errors.push('the north-flank repro ended inside Thin');
   if (s.slotsPassed !== 0) errors.push('the north-flank repro advanced slotsPassed (' + s.slotsPassed + ')');
-  if (s.gapCrossed) errors.push('the north-flank repro set gapCrossed without ever crossing the gap');
-  if (done) errors.push('the region finished via the north-flank repro, without the slots or the gap');
+  if (done) errors.push('the region finished via the north-flank repro');
   if (s.sealHits <= 0) errors.push('the north-flank repro never registered a seal hit (sealHits=' + s.sealHits + ')');
-  if (s.refusals <= refusalsBefore) errors.push('the north-flank repro reached the goal without a refusal (refusals=' + s.refusals + ')');
   await page.screenshot({ path: shotDir + 'thin-north-flank-sealed.png' });
-  // a clean vantage point showing the rail/panel itself, inside its own
-  // x-span (SEAL_X0..SEAL_X1) and just south of the sealed line (z=-11).
+  // from inside the Corner, a step toward Thin is stopped at the line and the Corner keeps the player
+  await setPos(20, -8.4);
+  await page.waitForTimeout(300);
+  await page.keyboard.down('ArrowLeft'); await page.waitForTimeout(2000); await page.keyboard.up('ArrowLeft'); await page.waitForTimeout(200);
+  pos = await sample(); const reg2 = await page.evaluate(() => window.__DA.region);
+  console.log('from the Corner edge: pos=(' + pos.x.toFixed(2) + ',' + pos.z.toFixed(2) + ') region=' + reg2);
+  if (pos.z < -11) errors.push('a step from the Corner crossed into Thin (z=' + pos.z.toFixed(2) + ')');
+  if (reg2 === 'thin') errors.push('the Corner edge step ended inside Thin');
   await setPos(15, -11.3);
   await page.waitForTimeout(200);
   await page.screenshot({ path: shotDir + 'thin-north-flank-rail.png' });
@@ -282,8 +285,8 @@ if (st.slotsPassed !== 0) errors.push('slotsPassed advanced without ever passing
 {
   // south: setPos(9,-27.3) holding ArrowUp used to slide east between the
   // world clamp (-27.5) and BOUNDS.z0 (-27), past every wall's x-check.
-  // Now, once x reaches SEAL_X0, z snaps back inside bounds and the
-  // player runs straight into wall A at full size, off the slot.
+  // Now the strip itself is stopped at the corridor's first wall: the seal
+  // is a wall you cannot cross from either side, never a pull inside.
   await setPos(9, -27.3);
   await page.waitForTimeout(120);
   const run = await walk('ArrowUp', { untilX: x => x >= 30, maxMs: 8000 });
@@ -292,7 +295,7 @@ if (st.slotsPassed !== 0) errors.push('slotsPassed advanced without ever passing
   console.log('south-flank repro: x=' + run.x.toFixed(2) + ' z=' + run.z.toFixed(2) + ' sealHits=' + s.sealHits + ' wallHits=' + s.wallHits + ' done=' + done);
   if (run.x >= 12) errors.push('the south-flank repro was not blocked at wall A (reached x=' + run.x.toFixed(2) + ')');
   if (s.sealHits <= 0) errors.push('the south-flank repro never registered a seal hit (sealHits=' + s.sealHits + ')');
-  if (s.wallHits <= 0) errors.push('the south-flank repro never hit a wall after being sealed back inside bounds (wallHits=' + s.wallHits + ')');
+  if (run.z > -27) errors.push('the south strip pulled the player inside (z=' + run.z.toFixed(2) + ')');
   if (s.slotsPassed !== 0) errors.push('the south-flank repro advanced slotsPassed (' + s.slotsPassed + ')');
   if (done) errors.push('the region finished via the south-flank repro');
 }
