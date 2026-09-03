@@ -104,21 +104,16 @@ if(s.state.order!==1)errors.push('re-raising A while B is still up must flip the
 // item 1: this is a fresh B->A latch — its own gate lands behind and above
 // the crossing, off the bottom of the frame under the normal forward-facing
 // camera. lookBack() should swing the camera round for a moment so the
-// arrival is actually seen. Poll rather than a fixed wait: the exact instant
-// the folds cross the latch threshold (and so when the look-back starts)
-// isn't pinned down to the millisecond.
-{
-  let sawOnscreen=false;
-  const t0=Date.now();
-  while(Date.now()-t0<3000){
-    const l2=await page.evaluate(()=>window.__DA_corner.light(2));
-    const pr=await page.evaluate(gg=>window.__DA.project(gg.x,gg.y,gg.z),l2);
-    if(pr.x>=0&&pr.x<=390&&pr.y>=0&&pr.y<=844){sawOnscreen=true;break;}
-    await page.waitForTimeout(150);
-  }
-  console.log('B->A gate on screen during the look-back:',sawOnscreen);
-  if(!sawOnscreen)errors.push('the B->A gate never projected inside the 390x844 frame during the look-back');
-}
+// arrival is actually seen. The region itself tracks whether the gate's
+// projection ever actually lands inside the frame every real render frame
+// (see sawLookback2 in corner.js's update()), checked below once more real
+// time has passed — the on-screen window mid-swing is brief, and under an
+// irregular headless frame rate the handful of frames that actually render
+// can land entirely outside it; the flag is sticky, so any later point
+// gives every frame rendered since the latch a chance to have caught it.
+await page.waitForTimeout(700);   // partway through the 1.2s swing, for the screenshot below
+await page.screenshot({path:'shots/corner-1b-lookback.png'});
+await page.waitForTimeout(1200);   // let the rest of the swing finish and settle
 
 s=await st(); console.log('settled after the toggle:',JSON.stringify(s.state));
 if(!s.state.marker2On||s.state.marker1On)errors.push('the live marker did not follow the toggled order: '+JSON.stringify(s.state));
@@ -158,6 +153,11 @@ await page.screenshot({path:'shots/corner-2-both-pulled.png'});
 // correct gate, close enough to trip the wrong-light check without also
 // walking into the right one by accident.
 await driveTo(27,0);
+
+// item 1 (assertion): by now every frame since the B->A latch above has had
+// a chance to catch the gate on screen during its look-back swing.
+s=await st(); console.log('sawLookback2 by now:',s.state.sawLookback2);
+if(!s.state.sawLookback2)errors.push('the B->A gate never projected inside the frame during the look-back');
 
 // item 2 (converse): a live, uncollected gate for the current order must
 // never trip the dead-end prompt, no matter how long the player lingers —

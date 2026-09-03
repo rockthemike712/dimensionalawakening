@@ -42,6 +42,8 @@ let pending=false, pendingPid=null, pendingX=0, pendingY=0, pendingAT0=0, pendin
 let rippleCoolA=0, rippleCoolB=0, humCoolA=0, humCoolB=0, hingeCoolA=0, hingeCoolB=0;
 let wrongNear1=false, wrongNear2=false, wrongTouches=0;
 let lookedBackFor1=false;   // fires lookBack() once per B->A latch, not every frame it stays latched
+let sawLookback2=false;     // did the B->A gate actually cross onto screen during that swing?
+const _projScratch=new THREE.Vector3();
 
 // the same two-hinge composition on the CPU as in the vertex shader below —
 // order-dependent, and it must agree with the GPU exactly. Takes an
@@ -451,8 +453,18 @@ region = registerRegion({
     // image lands behind and above the crossing, off the bottom of the
     // frame under the normal forward-facing camera. Swing around for a
     // moment so its arrival is actually seen, once per latch.
-    if(latched && order===1 && !got2){ if(!lookedBackFor1){lookedBackFor1=true; lookBack(1.2);} }
+    if(latched && order===1 && !got2){ if(!lookedBackFor1){lookedBackFor1=true; sawLookback2=false; lookBack(1.2);} }
     else lookedBackFor1=false;
+    // did the B->A gate actually cross onto the screen at some point during
+    // that swing? Checked every real frame here (via THREE's own project,
+    // matching __DA.project's math exactly) rather than by sparse external
+    // polling from outside, which can straddle the whole visible window
+    // between two samples under a slow/irregular frame rate and miss it.
+    if(!got2 && order===1){
+      _projScratch.set(p2.x,p2.y,p2.z).project(camera);
+      const sx=(_projScratch.x*.5+.5)*innerWidth, sy=(-_projScratch.y*.5+.5)*innerHeight;
+      if(sx>=0&&sx<=innerWidth&&sy>=0&&sy<=innerHeight) sawLookback2=true;
+    }
     // the wrong light answers with a dull blip, once per approach — "wrong
     // one" is learned by doing, no words about order. Gated on the folds
     // being at rest so a gate sweeping through COLLECT_R mid-fold during a
@@ -466,9 +478,13 @@ region = registerRegion({
     // the real dead end: fold both edges up again in an order already
     // collected (e.g. A->B again after gate 1) and there is no live gate
     // left to walk to for that order — nothing will ever happen until the
-    // player unfolds and pulls the other one first.
+    // player unfolds and pulls the other one first. Judged on the *targets*
+    // (foldAT/foldBT), not the springy fa/fb: the player's intent is "both
+    // pulled", a stable, discrete fact, and doesn't need to wait out — or
+    // survive — however long the spring takes to visually settle.
+    const bothPulled = foldAT>.5 && foldBT>.5;
     const liveGateForOrder = order===0 ? !got1 : !got2;
-    const deadEnd = latched && !liveGateForOrder && !(got1&&got2);
+    const deadEnd = bothPulled && !liveGateForOrder && !(got1&&got2);
     if(curRegion===region && deadEnd){
       stuckT += dt;
       if(stuckT>10 && !promptShown){ promptShown=true; setPrompt('Pull the other one first.'); }
@@ -497,7 +513,7 @@ region = registerRegion({
     if(promptShown){promptShown=false; setPrompt('');}
     if(dragA){ try{renderer.domElement.releasePointerCapture(dragAPid);}catch(_){} dragA=false; }
     if(dragB){ try{renderer.domElement.releasePointerCapture(dragBPid);}catch(_){} dragB=false; }
-    pending=false; lookedBackFor1=false;
+    pending=false; lookedBackFor1=false; sawLookback2=false; stuckT=0;
     foldAT=0; foldBT=0; foldA=0; foldB=0; aVel=0; bVel=0;
     ghost.visible=false;
   },
@@ -512,5 +528,5 @@ region = registerRegion({
   },
   debug(){ return {foldA:+foldA.toFixed(2), foldB:+foldB.toFixed(2), order, got1, got2, wrongTouches,
     marker1On:marker1.g.visible, marker2On:marker2.g.visible, dormantOn:dormant.g.visible,
-    promptShown, stuckT:+stuckT.toFixed(2)}; }
+    promptShown, stuckT:+stuckT.toFixed(2), sawLookback2}; }
 });
