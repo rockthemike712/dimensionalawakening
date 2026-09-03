@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {registerRegion, world, playerPos, velocity, curRegion, renderer, camera,
         emitRipple, blip, slide, chime, pulseFlash, setPrompt, refreshHud, makeLight,
-        saveGame, ease, audio, S2, lookBack} from '../game.js';
+        saveGame, ease, audio, S2, lookBack, looking} from '../game.js';
 
 // ---------------------------------------------------------------------------
 // LOWER THE LAMP — the identity crack, the last rung of Act I. A slit cuts
@@ -21,8 +21,16 @@ import {registerRegion, world, playerPos, velocity, curRegion, renderer, camera,
 const LX=15.8, LZ=13.5;             // LZ (round-5 review, item 9): close to the
 // region's near edge so the entrance light, the lamp and the far light all
 // sit in the same up-screen column the player is already walking toward when
-// they arrive from the room, instead of 8+ units off to the side
-const LY_MAX=4;                     // low enough that the core is on screen from the entrance
+// they arrive from the room, instead of 8+ units off to the side. The player's
+// own walk line, the far light and the shadow's tracked z all stay on LZ —
+// only the lamp object itself moves off it (see LAMP_LZ, round-6 item 7).
+const LAMP_LZ=LZ-2;                 // round-6 review, item 7: two units off the
+// player's own column so the lamp, the shadow and the player project to three
+// different screen columns instead of stacking into one blob at the working
+// spot near the rim — the shadow throw is x-only, so z is free to move
+const LY_MAX=3.2;                   // round-6 review, item 11: was 4 — the core at
+// LY_MAX projected near y=75 on first sight, behind the HUD title and the
+// movement hint; 3.2 clears it while staying on screen from the entrance
 // the lamp's lowest resting height: lowered back toward CENTER_H (fourth
 // review, item 3) so most of the shadow's reach comes from real projection
 // geometry rather than a fudge factor — still a comfortable .24 above
@@ -48,16 +56,33 @@ const LAMP_COLOR_C=new THREE.Color(LAMP_COLOR), SHADOW_COLOR_C=new THREE.Color(S
 // compensate (was 4.0) — ramped LINEARLY in u (not u^3, per item 3) so it
 // adds throughout the whole pull instead of hiding in the last few percent.
 const S_BOOST=9.0;
+// round-6 review, item 4: an untouched lamp used to give s≈sGeom (barely
+// above 1), so the shadow read as glued to the player's own feet until the
+// lamp was actually dragged. BASE_BOOST lifts the floor so even u=0 throws a
+// body-length ahead — the walk is the thing that reads first, before any
+// scrubbing. S_BOOST (the top end, at u=1) is untouched.
+const BASE_BOOST=2.6;
 const DRAG_FULL_PX=120;                  // the whole gesture spends its length on
                                           // the reach, not just its last ~14px
 const SWAP_MARGIN=.32;                   // how far past the far lip counts as "across" —
                                           // must clear the constrain block's own +.3 band
 // west of the lamp the light-through-player line points backward (the
-// shadow would be thrown behind the player) — instead hold it a short,
-// fixed-ish distance ahead, growing a little with the drag (item 4)
-const WEST_OFF_MIN=.6, WEST_OFF_MAX=1.6;
+// shadow would be thrown behind the player) — instead hold it a short lead
+// ahead, growing with the drag (item 4). WEST_OFF_MAX raised (round-6 review,
+// item 6) — it is now also the constant the projection branch carries across
+// x=LX (see the shadow update below), so a bigger lead here is what widens
+// the swap window back toward x=16.0, without touching S_BOOST's own top end.
+const WEST_OFF_MIN=.6, WEST_OFF_MAX=4.6;
 
 const raycaster=new THREE.Raycaster(), ndc=new THREE.Vector2();
+// round-6 review, item 8: screen-x of a world point, to check the echo (and
+// the look-back's old self, below) actually lands somewhere the phone can
+// show before committing to it — hoisted so neither allocates per frame
+const _screenScratch=new THREE.Vector3();
+function screenXOf(x,y,z){
+  _screenScratch.set(x,y,z).project(camera);
+  return (_screenScratch.x*.5+.5)*innerWidth;
+}
 const eyeBtnEl=()=>document.getElementById('eye');
 const eyeLabelEl=()=>document.getElementById('eyeLabel');
 // hoisted once (item 7 minor): the veil node itself, and its style object,
@@ -118,6 +143,11 @@ const region=registerRegion({
   lookBackT:-99, echoShown:false, pendingLookBack:false, lookingBackNow:false,
   rimIdleT:0, eyeIdleT:0, promptKind:null,
   stepAccum:0, blockedFlag:false, _railFlag:false,
+  // round-6 review, blocker 1: latched true the moment an in-page rAF watch
+  // (below, outside update()) actually catches the look-back at its peak —
+  // never reset, so a single hit anywhere during the window is enough. Tests
+  // assert this flag directly instead of polling from Node (see the watcher).
+  lookBackConfirmed:false,
 
   build(){
     const b=this.bounds;
@@ -133,11 +163,13 @@ const region=registerRegion({
     near.position.set(HOLE_X0,.05,(b.z0+b.z1)/2); world.add(near);
     const far=new THREE.Mesh(new THREE.BoxGeometry(.16,.06,b.z1-b.z0),rimMat.clone());
     far.position.set(HOLE_X1,.05,(b.z0+b.z1)/2); world.add(far);
-    // the rails run from just short of the near lip all the way to the
-    // region's east edge — the whole stretch where the slit could otherwise
-    // be walked around (item 6), not just the hole's own narrow width
+    // the rails run from just short of the near lip out to the universe's own
+    // east edge (round-6 review, item 3) — the fence itself (constrain(),
+    // below) now has no upper x bound either, so the visible rail has to
+    // reach exactly as far as the wall the player can actually feel; stopping
+    // it at the region's own x1 (as before) left the wall invisible beyond it
+    const railX0=HOLE_X0-.5, RAIL_X1=40, railW=RAIL_X1-railX0, railCX=(railX0+RAIL_X1)/2;
     const railMat=new THREE.MeshBasicMaterial({color:0xfff2c8,transparent:true,opacity:.8,blending:THREE.AdditiveBlending});
-    const railX0=HOLE_X0-.5, railW=b.x1-railX0, railCX=(railX0+b.x1)/2;
     const railN=new THREE.Mesh(new THREE.BoxGeometry(railW,.3,.14),railMat.clone());
     railN.position.set(railCX,.16,b.z0); world.add(railN);
     const railS=new THREE.Mesh(new THREE.BoxGeometry(railW,.3,.14),railMat.clone());
@@ -162,7 +194,7 @@ const region=registerRegion({
         }`,
     });
     const beam=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,BEAM_LEN,10),beamMat);
-    beam.position.set(LX,BEAM_LEN/2,LZ); world.add(beam);
+    beam.position.set(LX,BEAM_LEN/2,LAMP_LZ); world.add(beam);
     beam.userData.baseLen=BEAM_LEN;   // rescaled every frame to run sky -> core (item 5)
     const core=new THREE.Mesh(new THREE.OctahedronGeometry(.32,0),
       new THREE.MeshStandardMaterial({color:0xffffff,emissive:LAMP_COLOR,emissiveIntensity:4,roughness:.12}));
@@ -173,10 +205,25 @@ const region=registerRegion({
     const halo=new THREE.Mesh(new THREE.SphereGeometry(.55,16,16),
       new THREE.MeshBasicMaterial({color:LAMP_COLOR,transparent:true,opacity:.16,blending:THREE.AdditiveBlending,depthWrite:false}));
     const glow=new THREE.PointLight(LAMP_COLOR,26,12);
-    const lampGroup=new THREE.Group(); lampGroup.add(core,ring,halo,glow); world.add(lampGroup);
+    // round-6 review, item 10: a shade over the core — the one silhouette a
+    // makeLight() light never has (core+ring+beam, always). A frustum, not a
+    // spike to a point: narrow where the beam threads through the top, wide
+    // enough at the bottom to overhang the ring, so it reads as a solid,
+    // physical hood even next to the ring/beam/halo's own glow — a bright
+    // rim on the underside of the flare is what actually sells the shape at
+    // phone size, the same trick the near/far lips use for the rim of the
+    // hole.
+    const shadeMat=new THREE.MeshStandardMaterial({color:0x241a10,emissive:LAMP_COLOR,emissiveIntensity:.3,
+      roughness:.5,metalness:.3,side:THREE.DoubleSide});
+    const shade=new THREE.Mesh(new THREE.CylinderGeometry(.16,.62,.5,12,1,true),shadeMat);
+    shade.position.y=.62;
+    const shadeRim=new THREE.Mesh(new THREE.TorusGeometry(.62,.045,8,32),
+      new THREE.MeshBasicMaterial({color:LAMP_COLOR,transparent:true,opacity:.85,blending:THREE.AdditiveBlending}));
+    shadeRim.rotation.x=Math.PI/2; shadeRim.position.y=.37;
+    const lampGroup=new THREE.Group(); lampGroup.add(core,ring,halo,glow,shade,shadeRim); world.add(lampGroup);
     const grabH=LY_MAX-LY_MIN+1.4;
     const grab=new THREE.Mesh(new THREE.BoxGeometry(2.4,grabH,2.4),new THREE.MeshBasicMaterial({visible:false}));
-    grab.position.set(LX,(LY_MAX+LY_MIN)/2,LZ); world.add(grab);
+    grab.position.set(LX,(LY_MAX+LY_MIN)/2,LAMP_LZ); world.add(grab);
 
     // the shadow: a soft radial disc with a bright rim, pinned to the ledge
     const shadowMat=new THREE.MeshBasicMaterial({map:SHADOW_TEX,transparent:true,depthWrite:false,
@@ -284,8 +331,11 @@ const region=registerRegion({
 
     // ---- the look-back: queued at the swap (see the swapLock block below)
     // but not fired until the eye actually lets go, or the veil is already
-    // most of the way up — never at the swap instant itself (item 5) ----
-    if(this.pendingLookBack&&(!S2.eyes||this._veilCur<.3)){
+    // most of the way up — never at the swap instant itself (item 5). Round-6
+    // review, item 12: also fires 2.5s after the swap regardless of S2.eyes —
+    // a player who keeps the eye held through the footsteps, having just been
+    // invited to close their eyes, otherwise sits on a black screen forever.
+    if(this.pendingLookBack&&(!S2.eyes||this._veilCur<.3||t-this.swapT0>2.5)){
       this.pendingLookBack=false;
       lookBack(1.4); this.lookBackT=t; this.echoShown=false;
     }
@@ -299,10 +349,10 @@ const region=registerRegion({
     const u=this.dragU;
     this.lampY=u<1e-4?LY_MAX:THREE.MathUtils.lerp(LY_MAX,LY_MIN,u);
     const sGeom=this.lampY/(this.lampY-CENTER_H);
-    const boost=THREE.MathUtils.lerp(1,S_BOOST,u);
+    const boost=THREE.MathUtils.lerp(BASE_BOOST,S_BOOST,u);
     const s=sGeom*boost;
     const dim=lookingBack?.12:1;
-    this.lampGroup.position.set(LX,this.lampY,LZ);
+    this.lampGroup.position.set(LX,this.lampY,LAMP_LZ);
     this.lampGroup.rotation.y=t*.6; this.ring.rotation.z=t*.35;
     this.halo.scale.setScalar(1+.22*Math.sin(t*1.3));
     this.halo.material.opacity=(.14+.10*(.5+.5*Math.sin(t*1.3)))*dim;
@@ -316,7 +366,7 @@ const region=registerRegion({
     if(this.beam){
       const top=LY_MAX+2, len=Math.max(.05,top-this.lampY);
       this.beam.scale.y=len/this.beam.userData.baseLen;
-      this.beam.position.set(LX,this.lampY+len/2,LZ);
+      this.beam.position.set(LX,this.lampY+len/2,LAMP_LZ);
     }
     if(this.far){
       this.far.rotation.y=t*.5; this.far.position.y=.5+.1*Math.sin(t*2.1);
@@ -339,9 +389,28 @@ const region=registerRegion({
     // through-player ray points backward, which used to throw the shadow
     // behind the player — instead it's held a short, fixed-ish distance
     // ahead, growing a little with the drag so it's never a dead prop (item 4).
+    //
+    // Round-6 review, item 5: the west branch (playerPos.x+lead) and the
+    // projection branch (LX+s*(x-LX)) used to switch hard at x=LX, and since
+    // the projection branch's own value AT x=LX is LX itself (zero throw,
+    // directly under the light), the shadow snapped backward the instant you
+    // stepped past the lamp. Fix: the projection branch now carries the SAME
+    // lead constant, so both branches agree exactly at x=LX (LX+lead on both
+    // sides) — no snap, just a change in slope — and the two are blended
+    // (not hard-switched) over x∈[LX-1.2,LX] for good measure. The
+    // projection's own distance term is floored at 0 for x<LX (it would
+    // otherwise run hugely negative there, since s is large): with the lead
+    // shared by both branches, this floor pins the projection branch to a
+    // flat LX+lead plateau across the whole blend window, which — because it
+    // always sits at or above the west branch's own rising value there
+    // (equal only at the very end, x=LX) — is what guarantees the blend can
+    // never dip below either endpoint, whatever the blend curve.
     if(!this.swapped&&!this.swapLock){
-      const rawX=playerPos.x<LX?playerPos.x+THREE.MathUtils.lerp(WEST_OFF_MIN,WEST_OFF_MAX,u)
-                                :LX+s*(playerPos.x-LX);
+      const lead=THREE.MathUtils.lerp(WEST_OFF_MIN,WEST_OFF_MAX,u);
+      const westX=playerPos.x+lead;
+      const eastX=LX+lead+s*Math.max(playerPos.x-LX,0);
+      const k=ease(THREE.MathUtils.clamp((playerPos.x-(LX-1.2))/1.2,0,1));
+      const rawX=THREE.MathUtils.lerp(westX,eastX,k);
       const rawZ=playerPos.z;
       // clamp two units shy of the region's own edge, not right at it
       // (round-5 review, item 8) — the far light sits close to b.x1, and
@@ -463,9 +532,17 @@ const region=registerRegion({
           // own glow, since the light sits at the landing x too; splitting
           // the offset across both axes keeps it a couple of units clear of
           // the light while still reading as "a little further on", not
-          // "next to me"
+          // "next to me". Round-6 review, item 8: the old fixed +2.5 in z
+          // still clipped the right edge at this FOV — tried at ±1.2 instead,
+          // and checked against the actual projection (40..350, clear of both
+          // bezels on a 390-wide phone) before committing to a side, rather
+          // than trusting the geometry to land somewhere reasonable.
           const ex=THREE.MathUtils.clamp(this.targetPos.x+1.2,b.x0+.6,b.x1-.6);
-          const ez=THREE.MathUtils.clamp(this.targetPos.z+2.5,b.z0+.6,b.z1-.6);
+          let ez=THREE.MathUtils.clamp(this.targetPos.z+1.2,b.z0+.6,b.z1-.6);
+          if(!(screenXOf(ex,.02,ez)>40&&screenXOf(ex,.02,ez)<350)){
+            const ezAlt=THREE.MathUtils.clamp(this.targetPos.z-1.2,b.z0+.6,b.z1-.6);
+            if(screenXOf(ex,.02,ezAlt)>40&&screenXOf(ex,.02,ezAlt)<350) ez=ezAlt;
+          }
           this.farEcho.position.set(ex,.02,ez);
           this.farEcho.visible=true;
         }
@@ -494,11 +571,14 @@ const region=registerRegion({
   constrain(prevX,prevZ,pos,vel){
     if(this.swapLock) return;
     const b=this.bounds;
-    // this slice's x-domain only — the fence below reaches players standing
-    // in a neighbouring region's own z (that IS the point: the exploit is
-    // walking around outside these bounds, exactly where curRegion is
-    // already something else), but never outside this x-domain.
-    if(pos.x<b.x0||pos.x>b.x1) return;
+    // round-6 review, item 3: no upper x bound here any more. The fence
+    // below reaches players standing in a neighbouring region's own z (that
+    // IS the point: the exploit is walking around outside these bounds,
+    // exactly where curRegion is already something else) — and it has to
+    // reach them for every pos.x east of the near lip, not just up to this
+    // region's own x1, or the z-wall simply stops existing past x=26 and the
+    // slit can be walked around on the far side with no way back.
+    if(pos.x<b.x0) return;
 
     // the fence (round-5 review, item 4): a two-sided WALL on z at the
     // ledge's own rails, past the near lip's threshold — never a shove on
@@ -557,6 +637,7 @@ const region=registerRegion({
       farBeamOn:this.far?this.far.userData.beam.visible:null,
       farGlowOn:this.far?this.far.userData.glow.visible:null,
       lookingBack:!!this.lookingBackNow, pendingLookBack:this.pendingLookBack,
+      lookBackConfirmed:this.lookBackConfirmed,
       lampDim:this.core?+this.core.material.emissiveIntensity.toFixed(2):null,
       veilCur:+this._veilCur.toFixed(2)};
   },
@@ -600,3 +681,24 @@ renderer.domElement.addEventListener('pointermove',e=>{
 const endLampDrag=e=>{ if(region.dragging){ region.dragging=false; try{renderer.domElement.releasePointerCapture(e.pointerId);}catch(_){} } };
 renderer.domElement.addEventListener('pointerup',endLampDrag);
 renderer.domElement.addEventListener('pointercancel',endLampDrag);
+
+// round-6 review, blocker 1: the look-back's pass condition lives in the
+// page now, checked on every rendered frame — not sampled from Node. The
+// old test drove three page.evaluate/$eval round-trips per sample on a
+// 5-7fps headless page, which landed only two samples inside the 1.4s
+// plateau and missed it both times; the underlying beat was fine (verified
+// by hand: veil 0, old self dead centre of the screen) but the suite still
+// went red on its own assertion. This rAF loop sees every frame the browser
+// actually renders, latches region.lookBackConfirmed the instant it catches
+// looking() at its peak with the veil clear and the old self on screen, and
+// a test just reads the flag afterward.
+(function watchLookBack(){
+  requestAnimationFrame(watchLookBack);
+  if(!region.oldSelf||!region.oldSelf.visible) return;
+  if(looking()<.92) return;                                  // near the yaw's peak, not mid-swing
+  const op=parseFloat(getComputedStyle(veilEl).opacity)||0;
+  if(op>=.3) return;                                          // veil must actually be clear
+  _screenScratch.set(region.oldPos.x,.34,region.oldPos.z).project(camera);
+  const sx=(_screenScratch.x*.5+.5)*innerWidth, sy=(-_screenScratch.y*.5+.5)*innerHeight;
+  if(_screenScratch.z<1&&sx>=0&&sx<=innerWidth&&sy>=0&&sy<=innerHeight) region.lookBackConfirmed=true;
+})();

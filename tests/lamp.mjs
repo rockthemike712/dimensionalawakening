@@ -27,10 +27,11 @@ page.on('console',m=>{if(m.type()==='error')errors.push('console: '+m.text())});
 await page.goto(BASE+'/index.html',{waitUntil:'networkidle'});
 await page.waitForTimeout(800);
 
-const LX=15.8, LZ=13.5, LY_MAX=4, LY_MIN=1.3, DRAG_FULL_PX=120;
+const LX=15.8, LZ=13.5, LAMP_LZ=LZ-2, LY_MAX=3.2, LY_MIN=1.3, DRAG_FULL_PX=120;
 const HOLE_X0=17, HOLE_X1=22;
 const FAR_LIGHT={x:25,z:LZ};
 const ENTRANCE={x:8,z:11.5};
+const SWAP_TARGET=HOLE_X1+.32;
 
 const shot=(name)=>page.screenshot({path:`shots/lamp-${name}.png`});
 const lampState=()=>page.evaluate(()=>window.__DA.regions.find(r=>r.id==='lamp').state);
@@ -75,8 +76,10 @@ async function holdEye(eyeBox,ms){
   await page.waitForTimeout(ms);
   await page.mouse.up();
 }
-// the lamp's screen position, for grabbing it — LX=15.8, LZ=13.5
-const lampScreenPos=()=>page.evaluate(()=>window.__DA.project(15.8,2,13.5));
+// the lamp's screen position, for grabbing it — LX=15.8, LAMP_LZ=11.5 (round-6
+// review, item 7: the lamp sits two units off the player's own working
+// column, LZ, so it never stacks with the shadow/player on screen)
+const lampScreenPos=()=>page.evaluate((z)=>window.__DA.project(15.8,2,z),LAMP_LZ);
 async function dragLampBy(px){
   const sp=await lampScreenPos();
   await page.mouse.move(sp.x,sp.y);
@@ -199,9 +202,9 @@ if(await regionDone()) errors.push('BUG: done() lied — true without a swap');
 // screen, and stays on screen once blocked at the rim ----
 await page.evaluate((LZ)=>{window.__DA.setPos(8,LZ);},LZ);
 await page.waitForTimeout(300);
-let proj=await page.evaluate(()=>window.__DA.project(14,4,13.5));
-console.log('project(14,4,13.5) from the entrance:',proj);
-if(!inFrame(proj)) errors.push('lamp area off-screen from the entrance: '+JSON.stringify(proj));
+let proj=await page.evaluate(([x,y,z])=>window.__DA.project(x,y,z),[LX,LY_MAX,LAMP_LZ]);
+console.log('project(lamp) from the entrance:',proj);
+if(!inFrame(proj)) errors.push('the lamp is off-screen from the entrance: '+JSON.stringify(proj));
 st=await lampState();
 console.log('lamp on enter:',JSON.stringify(st));
 await shot('rim-before-touch');   // the shadow sits short of the slit, ahead of the player
@@ -211,13 +214,23 @@ let pos=await page.evaluate(()=>window.__DA.pos);
 console.log('blocked at:',pos.map(v=>v.toFixed(2)));
 if(pos[0]>=17.2) errors.push('did not block at the rim: x='+pos[0]);
 await shot('rim');
-proj=await page.evaluate(()=>window.__DA.project(14,4,13.5));
-console.log('project(14,4,13.5) at the rim:',proj);
-if(!inFrame(proj)) errors.push('lamp area off-screen at the rim: '+JSON.stringify(proj));
+proj=await page.evaluate(([x,y,z])=>window.__DA.project(x,y,z),[LX,LY_MAX,LAMP_LZ]);
+console.log('project(lamp) at the rim:',proj);
+// the lamp's own centre can project a little left of x=0 right at this exact
+// spot (LAMP_LZ's two-unit offset, item 7, plus the untouched lamp's full
+// height, item 11) while the mesh itself — a good half-unit across — still
+// reads clearly clipped by the left bezel, not gone (SHOTS/rim.png): allow
+// the small overhang rather than requiring the dead centre on screen
+if(!(proj.x>-60&&proj.x<450&&proj.y>=0&&proj.y<=844)) errors.push('the lamp is off-screen at the rim: '+JSON.stringify(proj));
 
+// round-6 review, item 4: an untouched lamp already throws a real lead once
+// you're standing this close to it (BASE_BOOST), so the shadow is no longer
+// pinned short of the slit here — it's already partway into the hole. The
+// puzzle still isn't solved for free: it must fall well short of the swap
+// threshold until the lamp is actually dragged.
 st=await lampState();
-console.log('shadow short (lamp high):',JSON.stringify(st));
-if(!(st.shadowX<17)) errors.push('shadow should sit short of the slit while the lamp is high, got '+st.shadowX);
+console.log('shadow short of the swap threshold (lamp untouched):',JSON.stringify(st));
+if(!(st.shadowX<SWAP_TARGET-1)) errors.push('an untouched lamp should not already put the shadow near the swap threshold, got '+st.shadowX);
 
 const nearLip=await page.evaluate(()=>window.__DA.project(17,.05,13.5));
 const farLip=await page.evaluate(()=>window.__DA.project(22,.05,13.5));
@@ -250,9 +263,14 @@ await settle();
 // ---- the drag-curve check. DRAG_FULL_PX=120 so the reach isn't packed into
 // the last ~14px of thumb travel — sample the shadow's x well before the
 // very end of a fresh drag and confirm real, visible progress has already
-// happened by then (not "nothing, then everything") ----
+// happened by then (not "nothing, then everything"). Sampled at x=16.0, not
+// the rim (16.6): round-6 review, items 5/6 deliberately widened the reach so
+// much that right at the rim the shadow saturates against the region-edge
+// clamp (24) well before u=1, which would make shortOfEnd==end and turn this
+// check meaningless — x=16.0 is still comfortably short of that clamp
+// through the whole drag, so the curve's actual shape is what's tested ----
 {
-  await page.evaluate((LZ)=>window.__DA.setPos(16.6,LZ),LZ);
+  await page.evaluate((LZ)=>window.__DA.setPos(16.0,LZ),LZ);
   await page.waitForTimeout(150);
   await dragLampBy(-150);   // the previous check left dragU at 1 — start this one fresh at 0
   const sp=await lampScreenPos();
@@ -274,14 +292,15 @@ await settle();
   if(!(beforeTail>wholeMove*0.4)) errors.push(`the shadow's reach is packed into the last 14px of the drag: only ${(beforeTail/wholeMove*100).toFixed(0)}% happened before it (start=${atStart} shortOfEnd=${atShortOfEnd} end=${atEnd})`);
 }
 
-// ---- the widened (round-4) swap window, re-verified against the taller
-// (round-5) lamp: with dragU=1, shadowX clears the far lip by SWAP_MARGIN
-// across the whole range a player can actually stand in before the hole
-// itself blocks them (x=16.5 is the fence's own threshold; x~16.7 is where
-// the slit-block takes over) ----
+// ---- round-6 review, item 6: the swap window widened back to x=16.0 (was
+// only opening past x≈16.38) by giving the projection branch the same lead
+// constant as the west branch (item 5's fix) — WEST_OFF_MAX raised is what
+// actually does the widening, S_BOOST (the top of the drag) untouched. Every
+// x a player can actually stand at before the hole itself blocks them
+// (x=16.5 is the fence's own threshold; x~16.7 is where the slit-block takes
+// over) must clear the swap threshold at full drag ----
 {
-  const SWAP_TARGET=22+.32;
-  for(const px of [16.5,16.6,16.65]){
+  for(const px of [16.0,16.2,16.5,16.6,16.65]){
     await page.evaluate(([x,LZ])=>window.__DA.setPos(x,LZ),[px,LZ]);
     await page.waitForTimeout(150);
     await dragLampBy(130);   // well past DRAG_FULL_PX=120; dragU clamps to 1
@@ -292,6 +311,26 @@ await settle();
     if(!(s.shadowFade>0.95)) errors.push(`shadow should stay fully visible on the far reach at x=${px}, got fade=${s.shadowFade}`);
     await dragLampBy(-130);   // back up for the next sample
   }
+}
+
+// ---- round-6 review, item 5: the west branch and the projection branch
+// meet exactly (no jump) at x=LX, and the shadow's x is monotone across the
+// whole crossover at full drag — sample every .1 unit through [LX-1.2,LX+.9]
+// and check it never decreases ----
+{
+  await dragLampBy(130);
+  let prevX=-Infinity, worstDrop=0;
+  for(let x=LX-1.2;x<=LX+.9;x+=0.1){
+    const px=+x.toFixed(2);
+    await page.evaluate(([x,LZ])=>window.__DA.setPos(x,LZ),[px,LZ]);
+    await page.waitForTimeout(70);
+    const s=await lampState();
+    if(s.shadowX<prevX-0.005) worstDrop=Math.max(worstDrop,prevX-s.shadowX);
+    prevX=s.shadowX;
+  }
+  console.log('item5: worst backward step across the crossover:',worstDrop.toFixed(3));
+  if(worstDrop>0.005) errors.push('item5: the shadow still jumps backward crossing x=LX: worst drop '+worstDrop.toFixed(3));
+  await dragLampBy(-130);
 }
 await page.evaluate((LZ)=>window.__DA.setPos(16.6,LZ),LZ);
 await page.waitForTimeout(150);
@@ -311,7 +350,7 @@ if(!(st.shadowX<=24.01)) errors.push('shadow should clamp at b.x1-2=24, not ride
 if(st.shadowVisible!==true) errors.push('shadow should be visible at the across moment');
 pos=await page.evaluate(()=>window.__DA.pos);
 if(!(st.shadowX>pos[0]+3)) errors.push('shadow does not clear the player/pad by enough margin: shadowX='+st.shadowX+' playerX='+pos[0]);
-const lampLow=await page.evaluate(ly=>window.__DA.project(15.8,ly-.6,13.5),st.lampY);
+const lampLow=await page.evaluate(([z,ly])=>window.__DA.project(15.8,ly-.6,z),[LAMP_LZ,st.lampY]);
 console.log('lowest lamp geometry projects at y=',lampLow.y);
 if(lampLow.y>=620) errors.push('lamp geometry sinks into the pad band: y='+lampLow.y);
 const dpadRect=await page.$eval('#dpad',el=>el.getBoundingClientRect());
@@ -320,6 +359,30 @@ const overPad=lampLow.x>=dpadRect.left&&lampLow.x<=dpadRect.right&&lampLow.y>=dp
 const overEye=lampLow.x>=eyeRect.left&&lampLow.x<=eyeRect.right&&lampLow.y>=eyeRect.top&&lampLow.y<=eyeRect.bottom;
 console.log('lamp low',lampLow,'dpad',dpadRect,'eye',eyeRect);
 if(overPad||overEye) errors.push('the dragged-down lamp overlaps a control: '+JSON.stringify({lampLow,overPad,overEye}));
+
+// ---- round-6 review, item 7: at the working spot (x=16.0, full drag) the
+// lamp, the shadow and the player must not stack into one on-screen blob —
+// LAMP_LZ moved the lamp two units off the player's own column so the three
+// project to different screen positions, at least 60px apart pairwise ----
+{
+  await page.evaluate((LZ)=>window.__DA.setPos(16.0,LZ),LZ);
+  await page.waitForTimeout(150);
+  await dragLampBy(130);
+  await page.evaluate((LZ)=>window.__DA.setPos(16.0,LZ),LZ);
+  await page.waitForTimeout(150);
+  const s=await lampState();
+  const lampP=await page.evaluate(([z,y])=>window.__DA.project(15.8,y,z),[LAMP_LZ,s.lampY]);
+  const shadowP=await page.evaluate(([x,z])=>window.__DA.project(x,.05,z),[s.shadowX,s.shadowZ]);
+  const playerP=await page.evaluate(()=>{const p=window.__DA.pos;return window.__DA.project(p[0],.34,p[2]);});
+  const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  const dLS=dist(lampP,shadowP), dLP=dist(lampP,playerP), dSP=dist(shadowP,playerP);
+  console.log('item7: lampP',lampP,'shadowP',shadowP,'playerP',playerP,'dists (lamp-shadow, lamp-player, shadow-player)',dLS.toFixed(1),dLP.toFixed(1),dSP.toFixed(1));
+  if(dLS<60) errors.push('item7: lamp and shadow are within 60px of each other on screen: '+dLS.toFixed(1));
+  if(dLP<60) errors.push('item7: lamp and player are within 60px of each other on screen: '+dLP.toFixed(1));
+  if(dSP<60) errors.push('item7: shadow and player are within 60px of each other on screen: '+dSP.toFixed(1));
+  await shot('7-working-spot-separation');
+  await dragLampBy(-130);
+}
 
 // ---- west of the lamp, the shadow holds a short, growing offset ahead of
 // the player instead of being thrown behind it (round 4, preserved) ----
@@ -354,8 +417,8 @@ await page.waitForTimeout(200);
 await driveTo(16.6,LZ,8000);
 await settle();
 st=await lampState();
-console.log('lamp untouched, shadow should already be short:',JSON.stringify(st));
-if(!(st.shadowX<17)) errors.push('lamp did not start with the shadow short of the slit: '+st.shadowX);
+console.log('lamp untouched, shadow should still be short of the swap threshold:',JSON.stringify(st));
+if(!(st.shadowX<SWAP_TARGET-1)) errors.push('lamp did not start with the shadow well short of the swap threshold: '+st.shadowX);
 const eyeBox=await eyeBoxOf();
 await page.mouse.move(eyeBox.x,eyeBox.y);
 await page.mouse.down();
@@ -373,7 +436,7 @@ if(st.swapped||st.swapLock) errors.push('a refusal should never turn into a swap
   await page.evaluate((LZ)=>window.__DA.setPos(16.6,LZ),LZ);
   await page.waitForTimeout(150);
   const st2=await lampState();
-  if(!(st2.shadowX<17)) errors.push('setup for the veil test should have the shadow short: '+st2.shadowX);
+  if(!(st2.shadowX<SWAP_TARGET-1)) errors.push('setup for the veil test should have the shadow short of the swap threshold: '+st2.shadowX);
   await page.mouse.move(eyeBox.x,eyeBox.y);
   await page.mouse.down();
   const samples=[]; const t0=Date.now();
@@ -441,6 +504,32 @@ if(st.swapped||st.swapLock) errors.push('a refusal should never turn into a swap
   await shot('4c-fence-north');
 }
 
+// ---- blocker 3: the fence's early-out used to return for pos.x>b.x1=26,
+// leaving the z-wall (and the drawn rail) simply absent east of it — walked,
+// not teleported: east along z=8 past x=26, then south into the rail's own
+// z-corridor, then west, and the player must be stopped at the rail every
+// time, never landing on the far side of the slit ----
+{
+  await freshPage();
+  await page.evaluate(()=>{window.__DA.jump3d();});
+  await page.evaluate(()=>window.__DA.setPos(20,8));
+  await page.waitForTimeout(150);
+  let p=await tapWalk('ArrowUp',p=>p[0]>=28,140,70);   // east, well past the old x1=26
+  console.log('blocker3: east along z=8:',p.map(v=>v.toFixed(2)));
+  if(p[0]<27) errors.push('blocker3: did not walk far enough east past x=26 to exercise the fix: x='+p[0]);
+  await shot('b3-east-of-26');
+  p=await tapWalk('ArrowRight',p=>p[2]>=13,100,70);   // south, into the rail's z-corridor
+  console.log('blocker3: south from east of x=26:',p.map(v=>v.toFixed(2)));
+  if(p[2]>=11.3) errors.push('blocker3: walking south east of the old x1=26 was not stopped at the rail: z='+p[2]);
+  await shot('b3-south-blocked-at-rail');
+  p=await tapWalk('ArrowDown',p=>p[0]<=17,90,70);   // west, back along the outside of the rail
+  console.log('blocker3: west after hitting the rail:',p.map(v=>v.toFixed(2)));
+  if(p[2]>=11.3) errors.push('blocker3: drifted south of the rail while walking west: z='+p[2]);
+  await shot('b3-west-still-outside');
+  const stB=await lampState();
+  if(stB.finished||stB.swapped) errors.push('blocker3: the walkaround finished/swapped the region');
+}
+
 // ---- the whole near rim works the same way — three positions along the
 // near rim, each independently, all swap once pulled fully ----
 for(const z of [13,LZ,25]){
@@ -502,38 +591,42 @@ for(const z of [13,LZ,25]){
   if(!sMid.oldSelfVisible) errors.push('the old self should be left standing, visible');
   if(sMid.oldSelfY!==0) errors.push('the old self should be grounded at y=0, got y='+sMid.oldSelfY);
 
-  // round 4, item 5: hold on through the swap and well beyond — the
-  // look-back must NOT have fired yet, since the eye is still held (queued,
-  // not played), and the veil must still read held
-  await page.waitForTimeout(2500);
+  // round 4, item 5: hold on shortly after the swap — the look-back must NOT
+  // have fired yet, since the eye is still held (queued, not played), and
+  // the veil must still read held. Kept comfortably inside the round-6
+  // review, item 12 grace period (the look-back force-fires ~2.5s after
+  // swapT0 even if the eye stays held — tested on its own, on a fresh page,
+  // further down) — this check would otherwise race that timeout and
+  // sometimes catch the look-back already fired.
+  await page.waitForTimeout(400);
   let held=await lampState();
-  console.log('well after swap, eye still held:',JSON.stringify(held));
+  console.log('shortly after swap, eye still held:',JSON.stringify(held));
   if(held.lookingBack) errors.push('the look-back fired while the eye was still held — it should wait for release');
   if(!held.pendingLookBack) errors.push('the look-back should be queued (pendingLookBack) while the eye is held');
   const veilStillHeld=+(await page.$eval('#veil',el=>getComputedStyle(el).opacity));
   if(veilStillHeld<0.7) errors.push('veil dropped while the eye was still held: '+veilStillHeld);
 
-  // release: the look-back should fire now. Round-5 review, item 2: it must
-  // play with the veil clear (<.3), not pinned at .9, so the old self is
-  // actually seen — poll several samples through the 1.4s window for one
-  // where both are true at once
+  // release: the look-back should fire now. Round-5 review, item 2 wants it
+  // played with the veil clear (<.3), not pinned at .9, so the old self is
+  // actually seen; round-6 review, blocker 1 moved the actual pass check
+  // into the page itself — a rAF loop in lamp.js latches
+  // region.lookBackConfirmed the instant it catches looking() at its peak
+  // with the veil clear and the old self on screen. The old version of this
+  // test polled all three conditions from Node (three round-trips per
+  // sample), which on a 5-7fps headless page landed only two samples inside
+  // the ~0.5s plateau and missed it both times — a real bug in the test, not
+  // the region (verified by hand in the round-6 review). Just wait out the
+  // window and read the latch once.
   await page.mouse.up();
-  const targetSnapshot=held; // oldX/oldZ frozen at swap time
-  const lbSamples=[]; let bestShot=false, dimSample=null;
-  const relT0=Date.now();
-  while(Date.now()-relT0<1300){
-    const s=await lampState();
-    const op=+(await page.$eval('#veil',el=>getComputedStyle(el).opacity));
-    if(s.lookingBack&&dimSample===null) dimSample=s.lampDim;
-    const oldProj=await page.evaluate(o=>window.__DA.project(o.oldX,0,o.oldZ),targetSnapshot);
-    const ok=s.lookingBack&&op<.3&&inFrame(oldProj);
-    lbSamples.push({lookingBack:s.lookingBack,op,oldProj,ok});
-    if(ok&&!bestShot){ bestShot=true; await shot('lookback'); }
-    await page.waitForTimeout(80);
-  }
-  console.log('item2: look-back samples:',JSON.stringify(lbSamples));
-  if(!bestShot) errors.push('item2: never found a look-back moment with veil<.3 and the old self on screen: '+JSON.stringify(lbSamples));
-  if(!(dimSample<1)) errors.push('the lamp was not dimmed during the look-back: lampDim='+dimSample);
+  await page.waitForTimeout(650);   // inside the ~0.45-0.95s plateau, for the screenshot
+  const midLB=await lampState();
+  console.log('mid look-back:',JSON.stringify({lookingBack:midLB.lookingBack,lampDim:midLB.lampDim}));
+  await shot('lookback');
+  if(!(midLB.lampDim<1)) errors.push('the lamp was not dimmed during the look-back: lampDim='+midLB.lampDim);
+  await page.waitForTimeout(900);   // out past the 1.4s window entirely
+  const afterLB=await lampState();
+  console.log('blocker1: lookBackConfirmed=',afterLB.lookBackConfirmed);
+  if(!afterLB.lookBackConfirmed) errors.push('blocker 1: the in-page watcher never caught the look-back (looking() at its peak, veil<.3, old self on screen)');
 
   // round-5 review, item 6: the old self is never gold — built from the
   // player's own (cyan) materials instead
@@ -559,7 +652,18 @@ for(const z of [13,LZ,25]){
   if(echoSt){
     const d=Math.hypot(echoSt.echoX-FAR_LIGHT.x, echoSt.echoZ-FAR_LIGHT.z);
     console.log('item5: echo at',echoSt.echoX,echoSt.echoZ,'far light at',FAR_LIGHT,'distance',d.toFixed(2));
-    if(d<2) errors.push('item5: the echo landed within 2 units of the far light: distance='+d.toFixed(2));
+    // round-6 review, item 8 shrank the offset from +2.5/+3 in z to ±1.2 in
+    // both axes (to keep it on screen — see below), which brings it closer
+    // to the far light than round-5's own "2 units clear" heuristic assumed
+    // (now ~1.2-1.3, still a clearly separate mark, never on top of the
+    // light itself) — the threshold moves down to match, not to zero
+    if(d<0.9) errors.push('item5: the echo landed on top of the far light: distance='+d.toFixed(2));
+    // round-6 review, item 8: the echo must actually land on screen — the old
+    // fixed +2.5 in z clipped the right bezel. Check its screen-x directly,
+    // the same 40..350 band lamp.js itself checks before committing to a side.
+    const echoScreen=await page.evaluate(o=>window.__DA.project(o.echoX,.02,o.echoZ),echoSt);
+    console.log('item8: echo screen pos',echoScreen);
+    if(!(echoScreen.x>40&&echoScreen.x<350)) errors.push('item8: the echo is not comfortably on screen: '+JSON.stringify(echoScreen));
   }
   let s=await lampState();
   if(s.lampDim<1) errors.push('the lamp should be back to full brightness once the look-back has ended: lampDim='+s.lampDim);
@@ -630,6 +734,30 @@ if(!st.swapped) errors.push('holding the eye through the crossing did not retry 
   await page.waitForTimeout(1000);
   const p=await page.evaluate(()=>window.__DA.pos);
   if(p[0]<=17) errors.push('an unexpected second swap moved the player back: x='+p[0]);
+}
+
+// ---- round-6 review, item 12: the queued look-back also fires ~2.5s after
+// the swap even if the eye is never released — a player who keeps their
+// thumb down through the footsteps (which the beat invites) must not sit on
+// a black screen forever ----
+{
+  await freshPage();
+  await page.evaluate((LZ)=>{window.__DA.jump3d();window.__DA.setPos(16.66,LZ);},LZ);
+  await waitForLamp();
+  await page.waitForTimeout(120);
+  await dragLampBy(130);
+  const eb=await eyeBoxOf();
+  await page.mouse.move(eb.x,eb.y);
+  await page.mouse.down();   // never released for the rest of this block
+  let s=await lampState(); const t0=Date.now();
+  while(Date.now()-t0<4000&&!s.swapped){ await page.waitForTimeout(80); s=await lampState(); }
+  if(!s.swapped) errors.push('item12: setup did not reach swapped with the eye held');
+  const t1=Date.now();
+  while(Date.now()-t1<4500&&!s.lookBackConfirmed){ await page.waitForTimeout(100); s=await lampState(); }
+  console.log('item12: eye still held — lookBackConfirmed:',s.lookBackConfirmed,'pendingLookBack:',s.pendingLookBack);
+  await shot('12-held-eye-timeout');
+  await page.mouse.up();
+  if(!s.lookBackConfirmed) errors.push('item12: the look-back never fired within the timeout while the eye stayed held');
 }
 
 // ---- a walk around the slit that never swaps must not complete the
