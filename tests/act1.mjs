@@ -63,7 +63,8 @@ check(await page.evaluate(d=>window.__DA.applySave(d),saveWith({thin:true,corner
 await page.waitForTimeout(600); await page.evaluate(()=>window.__DA.setPos(3,-2));
 s=await snap(); console.log('corner done:',JSON.stringify({next:s.next,actDone:s.actDone,room:s.regions.room}));
 check(s.next==='lamp','after the corner the next rung is not lamp: '+s.next); check(!s.regions.room.built,'the room exists after thin+corner');
-let mirror=false; for(let i=0;i<50&&!mirror;i++){ mirror=(await page.evaluate(()=>window.__DA.residue)).mirror; await page.waitForTimeout(200); }
+await page.evaluate(()=>{window.__mirrorSeen=false;(function f(){if(window.__DA.residue.mirror)window.__mirrorSeen=true;requestAnimationFrame(f);})();});
+let mirror=false; for(let i=0;i<70&&!mirror;i++){ mirror=await page.evaluate(()=>window.__mirrorSeen); await page.waitForTimeout(200); }
 console.log('corner residue: mirrored shadow seen',mirror); check(mirror,'no mirrored shadow flicker after the corner');
 const shadowBefore=(await page.evaluate(()=>window.__DA.residue)).shadowHex; check(shadowBefore===0,'shadow already lightened before the lamp: '+shadowBefore.toString(16));
 
@@ -91,6 +92,15 @@ cont=await page.evaluate(()=>{const d=window.__DA.loadSave();return d&&window.__
 s=await snap(); console.log('continue (crossed):',JSON.stringify({applied:cont,crossed:true,room:s.regions.room,next:s.next,arrow:s.arrow,counter:s.counter,actDone:s.actDone}));
 check(cont,'Continue after the crossing refused'); check(!s.regions.room.built,'the room exists on a fresh Continue');
 check(!s.actDone&&s.next==='thin','a fresh Continue does not start at thin'); check(!s.counter,'counter shown on Continue');
+
+// 9. the room rises only when the crossing point is on screen
+await page.evaluate(()=>window.__DA.setPos(24,19)); await page.waitForTimeout(400);
+await page.evaluate(()=>window.__DA.s2start()); await page.waitForTimeout(500);
+let r=await page.evaluate(()=>window.__DA.residue); console.log('room started out of view:',JSON.stringify(r));
+check(r.s2active&&r.risePending&&r.rise===null,'the room rose while the crossing was off screen');
+await page.evaluate(()=>window.__DA.setPos(0,0)); await page.waitForTimeout(700);
+r=await page.evaluate(()=>window.__DA.residue); console.log('crossing in view:',JSON.stringify(r));
+check(!r.risePending&&r.rise!==null,'the room did not rise once the crossing was on screen');
 
 await ctx.close(); await browser.close();
 if(errors.length){console.log('ERRORS');for(const e of errors)console.log(' - '+e);process.exit(1);}

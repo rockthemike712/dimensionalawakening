@@ -690,11 +690,21 @@ export function startStage2(){
   for(const l of landmarks)if(inBounds(room.bounds,l.x,l.z,.6)&&!l.sunk){l.sunk=true;l.sinkT=clock.elapsedTime;}   // the reeds it rises through sink
   if(inRoom()){eyeBtn.style.display='grid';eyeLabel.style.display='block';}
   s2SetRound(0);refreshHud();
-  // it rises out of the floor where the player first stood on the paper
-  S2.riseT=clock.elapsedTime; s2Group.scale.y=.001;
+  // it rises out of the floor where the player first stood on the paper,
+  // but only once that spot is on screen: a beat nobody sees did not happen
+  s2Group.scale.y=.001; S2.riseT=undefined; S2.risePending=true;
+  if(crossingInView())beginRise();
+  if(!inRoom())setPrompt('');
+}
+const _viewScratch=new THREE.Vector3();
+function crossingInView(){
+  const v=_viewScratch.set(S2_BARX,1,0).project(camera);
+  return v.z<1&&Math.abs(v.x)<.95&&v.y>-.95&&v.y<.95&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<34;
+}
+function beginRise(){
+  S2.risePending=false; S2.riseT=clock.elapsedTime;
   for(let z=-6;z<=6;z+=2)setTimeout(()=>emitRipple(S2_BARX,z,1.3),Math.abs(z)*90);
   depthChord();
-  if(!inRoom())setPrompt('');
 }
 function s2Hit(z){
   const bi=Math.floor((z+S2_HALF)/(2*S2_HALF)*S2_NB);
@@ -714,9 +724,10 @@ function s2RoundDone(){
 }
 function updateStage2(dt,t){
   if(!S2.active)return;
+  if(S2.risePending&&crossingInView())beginRise();
   if(S2.riseT!==undefined){const k=ease((t-S2.riseT)/2.4); s2Group.scale.y=Math.max(.001,k*(1+.18*Math.sin(k*Math.PI)*(1-k))); if(k>=1){s2Group.scale.y=1;S2.riseT=undefined;}}
   S2.emitter.rotation.y=t*1.1;S2.emitter.position.y=.8+.1*Math.sin(t*2.3);
-  if(!S2.arrived&&S2.riseT===undefined&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<6){
+  if(!S2.arrived&&S2.riseT===undefined&&!S2.risePending&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<6){
     S2.arrived=true;S2.roundT=t;setPrompt(S2_ROUNDS[S2.round].intro);
     eyeBtn.style.display='grid';if(!S2.eyeUsed)eyeLabel.style.display='block';
   }
@@ -1066,7 +1077,7 @@ function animate(){
  const ct=currentTarget();
  let arrowTo=null;
  if(!crossed&&ct>=0)arrowTo=foldedPoint(seedData[ct].p);
- else if(S2.active&&S2.riseT===undefined&&!S2.arrived)arrowTo=S2.center.clone();
+ else if(S2.active&&S2.riseT===undefined&&!S2.risePending&&!S2.arrived)arrowTo=S2.center.clone();
  else if(S2.active&&S2.done<S2_NR&&S2.round===3&&roomFold<.5&&curRegion&&curRegion.id==='room')arrowTo=new THREE.Vector3(S2_SEAM2X,1.6,playerPos.z*.4);
  else if(digested()&&!(S2.active&&inRoom()&&S2.done<S2_NR)&&!(curRegion&&ACT1.includes(curRegion.id)&&!(curRegion.done&&curRegion.done()))){
    const next=nextRegion(); if(next&&next!==curRegion)arrowTo=next.entrance?next.entrance.clone():S2.center.clone();
@@ -1112,7 +1123,7 @@ export function applySave(d){
   playerPos.set(2.2,0,-.5);
   for(const r of regions){if(r.id!=='room')buildRegion(r);if(d.visited&&d.visited.includes(r.id))r.visited=true;}
   for(const r of regions)if(r.id!=='room'&&r.load&&d.regions&&d.regions[r.id]){try{r.load(d.regions[r.id]);}catch(e){console.error(e);}}
-  if(actDone()||(d.s2&&d.s2.active)){startStage2();S2.riseT=undefined;s2Group.scale.y=1;S2.arrived=!!d.s2.arrived;S2.done=Math.min(S2_NR,d.s2.done|0);
+  if(actDone()||(d.s2&&d.s2.active)){startStage2();S2.riseT=undefined;S2.risePending=false;s2Group.scale.y=1;S2.arrived=!!d.s2.arrived;S2.done=Math.min(S2_NR,d.s2.done|0);
     if(S2.done<S2_NR)s2SetRound(Math.min(S2_NR-1,Math.max(S2.done,d.s2.round|0)));else{S2.marker&&(S2.marker.visible=false);}}
   digestedAt=0; walked=0;
   if(d.pos&&d.pos[0]>1.4)playerPos.set(d.pos[0],0,d.pos[2]);
@@ -1194,8 +1205,8 @@ window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get s
   save:saveGame,loadSave,applySave,clearSave,
   get actDone(){return actDone()},get digested(){return digested()},get next(){const n=nextRegion();return n?n.id:null},
   get arrow(){return beaconArrow.style.opacity==='1'},get counterShown(){return countEl.style.opacity!=='0'},
-  digest(){digestedAt=clock.elapsedTime;setPrompt(nextRegion()?'Follow the lights.':'');},unlockRoom(){startStage2();S2.riseT=undefined;s2Group.scale.y=1;},
+  digest(){digestedAt=clock.elapsedTime;setPrompt(nextRegion()?'Follow the lights.':'');},unlockRoom(){startStage2();S2.riseT=undefined;S2.risePending=false;s2Group.scale.y=1;},
   setPos(x,z){playerPos.set(x,0,z);velocity.set(0,0,0);},
   get _lm(){return landmarks},get _plane(){return sheetMesh},get flat(){return flat},
-  get residue(){return {flatPulse:+flatPulse.toFixed(2),mirror:pShadow2.visible,shadowHex:pShadow.material.color.getHex(),s2active:S2.active,rise:S2.riseT===undefined?null:+S2.riseT.toFixed(2)}},
+  get residue(){return {flatPulse:+flatPulse.toFixed(2),mirror:pShadow2.visible,shadowHex:pShadow.material.color.getHex(),s2active:S2.active,risePending:!!S2.risePending,rise:S2.riseT===undefined?null:+S2.riseT.toFixed(2)}},
   jump3d(){if(!crossed){crossed=true;dimT=clock.elapsedTime-2.5;walked=0;digestedAt=-1;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';}}};
