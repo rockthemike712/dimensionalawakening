@@ -905,7 +905,7 @@ function updatePlayer(dt,t){
  moveAccum+=velocity.length()*dt;
  if(moveAccum>1.1){emitRipple(playerPos.x,playerPos.z,.9);moveAccum=0;steps++;
    if(residue('thin')&&!(curRegion&&curRegion.id==='thin')&&steps%5===0)flatPulse=1;}   // after Thin: a flicker of flatness in the stride
- if(crossed){walked+=velocity.length()*dt; if(digestedAt<0&&(t-dimT>60||walked>40)){digestedAt=t;setPrompt(nextRegion()?'Follow the lights.':'');}}
+ if(crossed){walked+=velocity.length()*dt; if(digestedAt<0&&(t-dimT>60||walked>140)){digestedAt=t;setPrompt(nextRegion()?'Follow the lights.':'');}}
  flatPulse=Math.max(0,flatPulse-dt*3.2);
 
  const rp=foldedPoint(playerPos);player.position.copy(rp);
@@ -1090,7 +1090,7 @@ function animate(){
    beaconArrow.style.opacity=1;
    const bp=arrowTo;bp.y+=1.0;bp.project(camera);
    const sx=(bp.x*.5+.5)*innerWidth, sy=(-bp.y*.5+.5)*innerHeight;
-   const ang=Math.atan2(sy-innerHeight*.42,sx-innerWidth*.5)*180/Math.PI+90;
+   const ang=Math.atan2(sy-innerHeight*.42,sx-innerWidth*.5)*180/Math.PI-90;   // a down-glyph rotated by th points at 90+th
    beaconArrow.style.left=Math.max(42,Math.min(innerWidth-42,sx))+'px';
    beaconArrow.style.top=Math.max(105,Math.min(innerHeight-200,sy))+'px';
    beaconArrow.style.transform='translate(-50%,-50%) rotate('+ang+'deg)';
