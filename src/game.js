@@ -1194,7 +1194,7 @@ window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get s
   save:saveGame,loadSave,applySave,clearSave,
   get actDone(){return actDone()},get digested(){return digested()},get next(){const n=nextRegion();return n?n.id:null},
   get arrow(){return beaconArrow.style.opacity==='1'},get counterShown(){return countEl.style.opacity!=='0'},
-  digest(){digestedAt=clock.elapsedTime;},unlockRoom(){startStage2();S2.riseT=undefined;s2Group.scale.y=1;},
+  digest(){digestedAt=clock.elapsedTime;setPrompt(nextRegion()?'Follow the lights.':'');},unlockRoom(){startStage2();S2.riseT=undefined;s2Group.scale.y=1;},
   setPos(x,z){playerPos.set(x,0,z);velocity.set(0,0,0);},
   get _lm(){return landmarks},get _plane(){return sheetMesh},get flat(){return flat},
   get residue(){return {flatPulse:+flatPulse.toFixed(2),mirror:pShadow2.visible,shadowHex:pShadow.material.color.getHex(),s2active:S2.active,rise:S2.riseT===undefined?null:+S2.riseT.toFixed(2)}},
