@@ -205,7 +205,7 @@ if(s.state.foldA>.2||s.state.foldB>.2)errors.push('collecting did not spring the
 // item 2: the real dead end — pull B then A again, the same order already
 // collected, and there is no live gate left for it: nothing will ever
 // happen again until the player pulls the other one instead.
-await driveTo(27,0); await page.waitForTimeout(300);
+await driveTo(27,0); await page.waitForTimeout(1200);
 await dragEdge('B'); await dragEdge('A');
 s=await st(); console.log('re-latched B->A after it was already collected:',JSON.stringify(s.state));
 if(s.state.foldA<.9||s.state.foldB<.9||s.state.order!==1)errors.push('could not re-latch B->A for the dead-end test: '+JSON.stringify(s.state));
