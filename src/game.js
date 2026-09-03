@@ -942,7 +942,7 @@ function updateSeeds(t){
  const next=crossed?nextRegion():null;
  for(const L of regionLights){
    const r=L.userData.region;
-   L.visible=crossed&&!(r.done&&r.done());
+   L.visible=crossed&&!(r.done&&r.done())&&curRegion!==r;   // a signpost goes out once you stand where it points
    if(L.visible)animateLight(L,t,r===next);
  }
 }
