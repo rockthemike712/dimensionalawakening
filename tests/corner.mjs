@@ -238,8 +238,10 @@ await page.screenshot({path:'shots/corner-2-both-pulled.png'});
   // 3, GATE2_REST), inside COLLECT_R, collecting it by accident before the
   // deliberate approach below ever runs. -0.7 lands 1.92 units away, safe.
   await page.evaluate(()=>window.__DA.setPos(27,-0.4)); await page.waitForTimeout(300);
-  const hiddenNearCrossing=await page.evaluate(()=>window.__DA_corner.ghost());
-  if(hiddenNearCrossing.visible)errors.push('the mirrored self should hide within 1 unit of the crossing: '+JSON.stringify(hiddenNearCrossing));
+  // the playthrough review (finding 6): the crossing is the one place you fold
+  // from, so the mirrored self must show from there, not hide within a unit of it
+  const ghostOnCrossing=await page.evaluate(()=>window.__DA_corner.ghost());
+  if(!ghostOnCrossing.visible)errors.push('the mirrored self should show from the crossing: '+JSON.stringify(ghostOnCrossing));
   { const st2=await st(); if(st2.state.got2)errors.push('standing near the crossing to test ghost-hiding collected gate 2 by accident: '+JSON.stringify(st2.state)); }
 
   // round 5, finding 3 (blocker) / should-fix 6: a normal standing spot a

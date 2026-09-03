@@ -153,6 +153,11 @@ const region=registerRegion({
   lookBackConfirmed:false,
 
   build(){
+    // the core's eye release drops the veil to 0 at once; during the swap the
+    // region re-asserts .9 every frame, but a frame is long on a slow phone
+    // and the CSS transition shows the dip in between — so re-assert on the
+    // release event itself, after the core's handler (registered earlier)
+    for(const ev of ['pointerup','pointercancel']) eyeBtnEl().addEventListener(ev,()=>{ if(this.swapLock) setVeilOp(this,.9); });
     const b=this.bounds;
     // the slit: the universe grid does not show inside it
     const hole=new THREE.Mesh(new THREE.PlaneGeometry(HOLE_X1-HOLE_X0,b.z1-b.z0),
