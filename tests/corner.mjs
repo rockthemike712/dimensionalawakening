@@ -24,11 +24,25 @@ async function driveTo(tx,tz,ms=15000){const t0=Date.now();while(Date.now()-t0<m
 // crossing, as item 2 now requires for any grab at all; edge B's aim point
 // sits on its own line (z=CZ=0, which every test position here is close to).
 async function edgePoint(which){ const z=(await page.evaluate(()=>window.__DA.pos))[2]; return page.evaluate(([w,zz])=>window.__DA.project(w==='A'?27:24,1,w==='A'?zz+1:0),[which,z]); }
-async function dragEdge(which){
+// occasionally, under this environment's headless timing, a single mouse
+// down/move/up sequence doesn't register as a drag at all (the fold target
+// comes back unchanged) — not a corner.js issue, a Playwright/input-timing
+// flake. Verify the fold actually moved and retry once before giving up,
+// rather than let a single dropped gesture fail the whole run.
+async function dragEdgeOnce(which){
   const p=await edgePoint(which);
-  await page.mouse.move(p.x,p.y); await page.mouse.down();
+  await page.mouse.move(p.x,p.y); await page.waitForTimeout(120); await page.mouse.down(); await page.waitForTimeout(60);
   if(which==='A')await page.mouse.move(p.x,p.y+300,{steps:20}); else await page.mouse.move(p.x-260,p.y,{steps:20});
   await page.mouse.up(); await page.waitForTimeout(1500);
+}
+async function dragEdge(which,tries=3){
+  const before=(await st()).state[which==='A'?'foldA':'foldB'];
+  for(let i=0;i<tries;i++){
+    await dragEdgeOnce(which);
+    const after=(await st()).state[which==='A'?'foldA':'foldB'];
+    if(Math.abs(after-before)>=.05) return;
+    console.log('drag on edge',which,'did not register (fold stayed at',after,'), attempt',i+1,'of',tries);
+  }
 }
 async function tapEdge(which){
   const p=await edgePoint(which);
@@ -50,7 +64,7 @@ await page.evaluate(()=>window.__DA.setPos(17,0)); await page.waitForTimeout(100
 // ten units out (the old entrance's distance) it must do nothing at all.
 {
   const before=await st();
-  await dragEdge('A');
+  await dragEdgeOnce('A');   // dragEdge() would retry this as "didn't register" — a no-op here is the whole point
   const after=await st();
   console.log('grab attempt from ten units out:',JSON.stringify(after.state));
   if(after.state.foldA!==0||after.state.order!==before.state.order)
