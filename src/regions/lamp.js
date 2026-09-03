@@ -222,8 +222,12 @@ const region=registerRegion({
     if(this.shadowVisible&&playerPos.x<HOLE_X0&&this.shadowPos.x>HOLE_X1+SWAP_MARGIN&&insideMargin){
       this.swapLock=true; this.swapT0=t; this.footIdx=-1;
       this.oldPos.copy(playerPos);
+      // land on the far side, not necessarily all the way out at wherever
+      // the (now much longer-reaching, item 3) shadow's tip sits — capped a
+      // few units past the far lip so there's still a walk to the light,
+      // not an instant finish the moment the swap completes
       this.targetPos.set(
-        THREE.MathUtils.clamp(this.shadowPos.x,b.x0+.6,b.x1-.6),0,
+        THREE.MathUtils.clamp(Math.min(this.shadowPos.x,HOLE_X1+1.5),b.x0+.6,b.x1-.6),0,
         THREE.MathUtils.clamp(this.shadowPos.z,b.z0+.6,b.z1-.6));
       velocity.set(0,0,0);
       // left standing the moment you start to go: the camera glides away from
