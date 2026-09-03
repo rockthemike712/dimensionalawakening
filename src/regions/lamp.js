@@ -25,6 +25,9 @@ const LX=15.8, LZ=13.5;             // LZ (round-5 review, item 9): close to the
 // own walk line, the far light and the shadow's tracked z all stay on LZ —
 // only the lamp object itself moves off it (see LAMP_LZ, round-6 item 7).
 const LAMP_LZ=LZ-2;                 // round-6 review, item 7: two units off the
+const _lampProj=new THREE.Vector3();
+// the fallback prompt only makes sense while the lamp is actually in the frame
+const lampOnScreen=()=>{ const v=_lampProj.set(LX,2,LAMP_LZ).project(camera); return v.z<1&&Math.abs(v.x)<.92&&Math.abs(v.y)<.95; };
 // player's own column so the lamp, the shadow and the player project to three
 // different screen columns instead of stacking into one blob at the working
 // spot near the rim — the shadow throw is x-only, so z is free to move
@@ -150,6 +153,11 @@ const region=registerRegion({
   lookBackConfirmed:false,
 
   build(){
+    // the core's eye release drops the veil to 0 at once; during the swap the
+    // region re-asserts .9 every frame, but a frame is long on a slow phone
+    // and the CSS transition shows the dip in between — so re-assert on the
+    // release event itself, after the core's handler (registered earlier)
+    for(const ev of ['pointerup','pointercancel']) eyeBtnEl().addEventListener(ev,()=>{ if(this.swapLock) setVeilOp(this,.9); });
     const b=this.bounds;
     // the slit: the universe grid does not show inside it
     const hole=new THREE.Mesh(new THREE.PlaneGeometry(HOLE_X1-HOLE_X0,b.z1-b.z0),
@@ -559,7 +567,7 @@ const region=registerRegion({
       // item 13) — a player who stops right at the entrance is exactly who
       // this fallback is for
       if(!this.lampTouched) this.rimIdleT+=dt; else this.rimIdleT=0;
-      if(this.rimIdleT>8&&this.promptKind!=='pull'&&!this.lampTouched){ setPrompt('Pull the lamp down.'); this.promptKind='pull'; }
+      if(this.rimIdleT>8&&this.promptKind!=='pull'&&!this.lampTouched&&lampOnScreen()){ setPrompt('Pull the lamp down.'); this.promptKind='pull'; }
       if(this.lampTouched&&this.promptKind==='pull'){ setPrompt(''); this.promptKind=null; }
       const across=this.shadowGroup.visible&&this.shadowPos.x>HOLE_X1+SWAP_MARGIN;
       if(across&&!S2.eyes) this.eyeIdleT+=dt; else this.eyeIdleT=0;
@@ -591,7 +599,7 @@ const region=registerRegion({
     // only ever fires the instant a rail is actually crossed, in either
     // direction, and only ever touches z. It still has to act regardless of
     // curRegion, for the same reason as before.
-    if(pos.x>HOLE_X0-.5){
+    if(pos.x>HOLE_X0-.5&&!this.finished){   // the fence has nothing left to protect once the act's business here is done
       const z0=b.z0+.3, z1=b.z1-.3;
       if(prevZ<z0&&pos.z>=z0){ pos.z=z0-.1; if(vel.z>0)vel.z*=-.2; this._railBump('n',z0); }
       else if(prevZ>z0&&pos.z<=z0){ pos.z=z0+.1; if(vel.z<0)vel.z*=-.2; this._railBump('n',z0); }
@@ -607,7 +615,7 @@ const region=registerRegion({
 
     // the slit itself: solid across the ledge's own z-range; nothing between
     // the lips is walkable, swapped or not
-    if(pos.x>HOLE_X0-.3&&pos.x<HOLE_X1+.3){
+    if(pos.x>HOLE_X0-.3&&pos.x<HOLE_X1+.3&&!this.finished){
       const fromNear=prevX<=(HOLE_X0+HOLE_X1)/2;
       if(fromNear){ pos.x=Math.min(pos.x,HOLE_X0-.3); if(vel.x>0)vel.x*=-.2; }
       else{ pos.x=Math.max(pos.x,HOLE_X1+.3); if(vel.x<0)vel.x*=-.2; }
