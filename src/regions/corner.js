@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {registerRegion, world, playerPos, dim, crossed, emitRipple, blip, chime, slide,
         pulseFlash, setPrompt, refreshHud, makeLight, saveGame, planeMat, camera,
-        clock, renderer, audio, curRegion, rgt} from '../game.js';
+        clock, renderer, audio, curRegion, rgt, lookBack} from '../game.js';
 
 // =====================================================================
 // THE CORNER COMES TO YOU — two perpendicular hinges crossing in an X.
@@ -14,15 +14,17 @@ import {registerRegion, world, playerPos, dim, crossed, emitRipple, blip, chime,
 const CX=27, CZ=0, HALFW=12, HALFH=9, FOLD_MAX=1.42;
 const COLOR=0xffcf6e;
 // where the far-quarter lights stand on the flat paper. Both hinges pass
-// through the crossing, and the entrance now sits ON the crossing (CX,CZ)
-// too — so the corner comes to the player by construction, no matter which
-// order they pull in: the A->B gate (RAW1) lands ~0.4 units from the
-// crossing, the B->A gate (RAW2) ~5.3 units out (checked by direct
-// computation of warp() at fa=fb=1 for each order).
+// through the crossing, so the corner comes to the player by construction,
+// no matter which order they pull in: the A->B gate (RAW1) lands ~0.4 units
+// from the crossing, the B->A gate (RAW2) ~5.3 units out (checked by direct
+// computation of warp() at fa=fb=1 for each order). The entrance sits just
+// off the crossing at (24.5,0) — not on top of the X the player has to grab
+// — but GRAB_R (below) is measured from the crossing itself and is generous
+// enough (4.5) that a pull from the entrance is still accepted on arrival.
 const RAW1=new THREE.Vector3(28,0,4);   // order A->B gate (~0.4 from the crossing)
 const RAW2=new THREE.Vector3(31,0,6);   // order B->A gate (~5.3 from the crossing)
 const COLLECT_R=1.7;
-const GRAB_R=4.5;                       // must stand this close to the crossing for a pull to do anything
+const GRAB_R=4.5;                       // must stand this close to the crossing (CX,CZ) for a pull to do anything
 const GHOST_R=1.7;                      // the mirrored self never strays farther (over ground) than this from where the camera is actually looking
 const GHOST_YMAX=1.1;                   // ...nor rises higher than this above the ground
 
@@ -33,8 +35,13 @@ let order=0;                     // 0 = A pulled first (A then B), 1 = B first (
 let got1=false, got2=false, promptShown=false, stuckT=0;
 let dragA=false, dragAY=0, dragAT0=0, dragAPid=null;
 let dragB=false, dragBX=0, dragBT0=0, dragBPid=null;
-let rippleCoolA=0, rippleCoolB=0, humCoolA=0, humCoolB=0;
+// a pointerdown that lands within GRAB_W of *both* lines (near the crossing
+// itself) does not commit to an axis yet — it waits for the first real
+// movement to say which line was meant, see onDown/onMove/onUp below.
+let pending=false, pendingPid=null, pendingX=0, pendingY=0, pendingAT0=0, pendingBT0=0;
+let rippleCoolA=0, rippleCoolB=0, humCoolA=0, humCoolB=0, hingeCoolA=0, hingeCoolB=0;
 let wrongNear1=false, wrongNear2=false, wrongTouches=0;
+let lookedBackFor1=false;   // fires lookBack() once per B->A latch, not every frame it stays latched
 
 // the same two-hinge composition on the CPU as in the vertex shader below —
 // order-dependent, and it must agree with the GPU exactly. Takes an
@@ -50,6 +57,22 @@ function warp(x,y,z,out){
 }
 // module-scope scratch: warp()'s out-params, reused every frame
 const _p1=new THREE.Vector3(), _p2=new THREE.Vector3(), _ghostMp=new THREE.Vector3(), _playerWarp=new THREE.Vector3();
+
+// the fully-latched (fa=fb=1) landing spot for each gate, under its own
+// fixed order — a constant, computed once, independent of the live fold
+// state. Used for the dormant/cold marker (item 3): once one gate is
+// collected, the *other* one's rest spot gets a permanent, dim presence
+// even while the live folds don't currently match its order.
+function restWarp(x,y,z,ord,out){
+  let X=x-CX, Y=y||0, Z=z-CZ;
+  const c=Math.cos(FOLD_MAX), s=Math.sin(FOLD_MAX);
+  const stepA=()=>{ if(X>0){const x0=X,y0=Y; X=x0*c-y0*s; Y=x0*s+y0*c;} };
+  const stepB=()=>{ if(Z>0){const z0=Z,y0=Y; Z=z0*c-y0*s; Y=z0*s+y0*c;} };
+  if(ord<0.5){stepA();stepB();}else{stepB();stepA();}
+  return out.set(CX+X,Y,CZ+Z);
+}
+const GATE1_REST=restWarp(RAW1.x,RAW1.y,RAW1.z,0,new THREE.Vector3());
+const GATE2_REST=restWarp(RAW2.x,RAW2.y,RAW2.z,1,new THREE.Vector3());
 
 // ---------- ground patch: a clone of the sheet look, two hinges of its own ----------
 const geo=new THREE.PlaneGeometry(24,18,120,90); geo.rotateX(-Math.PI/2);
@@ -158,16 +181,40 @@ function animateGate(g,t,active){
 // plane the player walks on, in the core's own floor-marker style ----------
 function makeGroundMarker(){
   const g=new THREE.Group();
-  const ring=new THREE.Mesh(new THREE.RingGeometry(.62,.8,48),
+  // kept modest (about 1.1 across) — the gate lands close to the crossing
+  // on delivery, right where the player is already standing, and the old
+  // .8-radius ring read as huge parked directly at the player's own feet
+  const ring=new THREE.Mesh(new THREE.RingGeometry(.38,.55,48),
     new THREE.MeshBasicMaterial({color:COLOR,transparent:true,opacity:.8,side:THREE.DoubleSide}));
   ring.rotation.x=-Math.PI/2;
-  const disc=new THREE.Mesh(new THREE.CircleGeometry(.6,40),
+  const disc=new THREE.Mesh(new THREE.CircleGeometry(.42,40),
     new THREE.MeshBasicMaterial({color:COLOR,transparent:true,opacity:.18,side:THREE.DoubleSide}));
   disc.rotation.x=-Math.PI/2;
   g.add(ring,disc); g.visible=false;
   return {g,ring,disc};
 }
 const marker1=makeGroundMarker(), marker2=makeGroundMarker();
+
+// ---------- the dormant marker: a cold, unmoving ring+disc at the *other*
+// gate's rest spot, once the first one is collected — "there is another
+// one, not lit for what you just did", read without a word ----------
+function makeColdMarker(){
+  const g=new THREE.Group();
+  const ring=new THREE.Mesh(new THREE.RingGeometry(.62,.8,48),
+    new THREE.MeshBasicMaterial({color:0x8fa6ad,transparent:true,opacity:.26,side:THREE.DoubleSide}));
+  ring.rotation.x=-Math.PI/2;
+  const disc=new THREE.Mesh(new THREE.CircleGeometry(.6,40),
+    new THREE.MeshBasicMaterial({color:0x8fa6ad,transparent:true,opacity:.05,side:THREE.DoubleSide}));
+  disc.rotation.x=-Math.PI/2;
+  g.add(ring,disc); g.visible=false;
+  return {g,ring,disc};
+}
+const dormant=makeColdMarker();
+function updateDormant(){
+  if(got1&&!got2){ dormant.g.visible=true; dormant.g.position.set(GATE2_REST.x,.05,GATE2_REST.z); }
+  else if(got2&&!got1){ dormant.g.visible=true; dormant.g.position.set(GATE1_REST.x,.05,GATE1_REST.z); }
+  else dormant.g.visible=false;
+}
 
 // ---------- the mirrored player: reads as *you*, not as the gate — the
 // player's own white-cyan palette, lifted clear of its own shadow ----------
@@ -222,13 +269,30 @@ function onDown(e){
     blip(110,.16,.09,'sine'); emitRipple(CX,CZ,.5);
     return;
   }
-  if(inA && (!inB || dA<=dB)){ dragA=true; dragAY=e.clientY; dragAT0=foldAT; dragAPid=e.pointerId; }
+  if(inA && inB){
+    // dead center, within reach of both lines: a coin flip on distance alone
+    // used to decide here, which reads a vertical drag on a B pick as a tap
+    // (toggling B off) whenever it happened to land a hair closer to the A
+    // line. Defer instead to the first real movement — see onMove.
+    pending=true; pendingPid=e.pointerId; pendingX=e.clientX; pendingY=e.clientY;
+    pendingAT0=foldAT; pendingBT0=foldBT;
+  } else if(inA){ dragA=true; dragAY=e.clientY; dragAT0=foldAT; dragAPid=e.pointerId; }
   else { dragB=true; dragBX=e.clientX; dragBT0=foldBT; dragBPid=e.pointerId; }
   try{renderer.domElement.setPointerCapture(e.pointerId);}catch(_){}
   audio(); emitRipple(CX,CZ,.7);
 }
 function onMove(e){
   if(!crossed || curRegion!==region) return;
+  if(pending){
+    const dx=e.clientX-pendingX, dy=e.clientY-pendingY;
+    if(Math.hypot(dx,dy)<6) return;   // not enough movement yet to read a direction
+    pending=false;
+    // dominant vertical motion means the horizontal line (A) was grabbed;
+    // dominant horizontal motion means the vertical line (B) was grabbed —
+    // the axis you drag perpendicular to is the one you meant to pull.
+    if(Math.abs(dy)>=Math.abs(dx)){ dragA=true; dragAY=pendingY; dragAT0=pendingAT0; dragAPid=pendingPid; }
+    else { dragB=true; dragBX=pendingX; dragBT0=pendingBT0; dragBPid=pendingPid; }
+  }
   if(dragB){
     foldBT=THREE.MathUtils.clamp(dragBT0+(dragBX-e.clientX)/Math.max(innerWidth*.38,260),0,1);
     if(clock.elapsedTime-rippleCoolB>.14){rippleCoolB=clock.elapsedTime;emitRipple(CX+(Math.random()-.5)*16,CZ,.4);}
@@ -243,6 +307,17 @@ function onMove(e){
   }
 }
 function onUp(e){
+  if(pending){
+    // released before moving enough to read a direction — a true tap dead
+    // center. No drag direction to go on, so fall back to whichever line
+    // the pointer actually sat nearer, same as a tap anywhere else.
+    pending=false;
+    const pt=pickGround(e);
+    const dA=pt?Math.abs(pt.x-CX):0, dB=pt?Math.abs(pt.z-CZ):Infinity;
+    if(dA<=dB) setTarget('A', pendingAT0>.5?0:1); else setTarget('B', pendingBT0>.5?0:1);
+    try{renderer.domElement.releasePointerCapture(e.pointerId);}catch(_){}
+    return;
+  }
   if(!(dragA||dragB)) return;
   if(dragB){
     dragB=false;
@@ -266,7 +341,7 @@ function collect(n,p){
   if(dragA){ try{renderer.domElement.releasePointerCapture(dragAPid);}catch(_){} dragA=false; }
   if(dragB){ try{renderer.domElement.releasePointerCapture(dragBPid);}catch(_){} dragB=false; }
   if(n===1){got1=true; light1.visible=false;} else {got2=true; light2.visible=false;}
-  refreshHud(); chime(); pulseFlash();
+  refreshHud(); chime(); pulseFlash(); updateDormant();
   emitRipple(p.x,p.z,1.8,new THREE.Color(1,.85,.5));
   foldAT=0; foldBT=0;      // collecting it lets the paper spring back open
   saveGame();
@@ -281,12 +356,14 @@ window.__DA_corner={
 let region;
 region = registerRegion({
   id:'corner', name:'CORNERS', color:COLOR,
-  // the entrance sits ON the crossing itself, not at the bounds' edge — the
-  // core's beacon walks the player onto the X before they ever pull, so
-  // "stand on it" is the first thing they do here, not a rule found later.
-  bounds:{x0:15,x1:39,z0:-9,z1:9}, entrance:new THREE.Vector3(CX,0,CZ),
+  // the entrance sits just off the crossing (2.5 units, well inside GRAB_R)
+  // rather than on top of the X — the core's beacon still walks the player
+  // right up next to it, but its own beam no longer stands on the exact
+  // line the player has to grab, so "stand on it" is still the first thing
+  // learned here, not obscured by a light fixture parked on the grab point.
+  bounds:{x0:15,x1:39,z0:-9,z1:9}, entrance:new THREE.Vector3(24.5,0,CZ),
   build(){
-    world.add(patch,dimMesh,ghost,marker1.g,marker2.g);
+    world.add(patch,dimMesh,ghost,marker1.g,marker2.g,dormant.g);
     world.add(edgeA.bar,edgeA.halo,edgeB.bar,edgeB.halo);
     light1.userData.t0=Math.random()*6; light2.userData.t0=Math.random()*6;
     renderer.domElement.addEventListener('pointerdown',onDown);
@@ -300,6 +377,7 @@ region = registerRegion({
     aVel+=((foldAT-foldA)*K-aVel*D)*dt; foldA=THREE.MathUtils.clamp(foldA+aVel*dt,-.1,1.12);
     bVel+=((foldBT-foldB)*K-bVel*D)*dt; foldB=THREE.MathUtils.clamp(foldB+bVel*dt,-.1,1.12);
     const fa=Math.max(0,foldA), fb=Math.max(0,foldB), combo=fa*fb;
+    const latched = fa>.9 && fb>.9;   // both edges up — the gate is actually delivered, not just one
     mat.uniforms.uA.value=fa; mat.uniforms.uB.value=fb; mat.uniforms.uOrder.value=order;
     mat.uniforms.uTime.value=t; mat.uniforms.uDim.value=dim; mat.uniforms.uCombo.value=combo;
     mat.uniforms.uFold.value=fa; mat.uniforms.uAwake.value=planeMat.uniforms.uAwake.value;
@@ -315,8 +393,12 @@ region = registerRegion({
     light1.position.copy(p1); light2.position.copy(p2);
     animateGate(light1,t,!got1&&order===0); animateGate(light2,t,!got2&&order===1);
 
-    marker1.g.visible=!got1&&order===0; marker1.g.position.set(p1.x,.05,p1.z);
-    marker2.g.visible=!got2&&order===1; marker2.g.position.set(p2.x,.05,p2.z);
+    // only once the gate is actually delivered (both edges latched) — with
+    // only one edge up, the other's un-folded contribution leaves the gate
+    // still mid-flight partway across the field, and the marker showing up
+    // there read as a huge ring parked right at the player's own feet.
+    marker1.g.visible=latched&&!got1&&order===0; marker1.g.position.set(p1.x,.05,p1.z);
+    marker2.g.visible=latched&&!got2&&order===1; marker2.g.position.set(p2.x,.05,p2.z);
     marker1.ring.material.opacity=.55+.3*Math.sin(t*3); marker2.ring.material.opacity=.55+.3*Math.sin(t*3+1.7);
 
     // the mirrored player: a true point-reflection through the crossing
@@ -341,36 +423,81 @@ region = registerRegion({
     let gdx=raw.x-rp.x, gdz=raw.z-rp.z;
     const glen=Math.hypot(gdx,gdz);
     if(glen>GHOST_R){ const sc=GHOST_R/glen; gdx*=sc; gdz*=sc; }
-    ghost.position.set(rp.x+gdx, THREE.MathUtils.clamp(raw.y,0,GHOST_YMAX), rp.z+gdz);
+    // lift only the figure (core + halo), not the whole group — the group's
+    // own y stays at ground level so ghostShadow, a child of the group at a
+    // fixed local y, keeps reading as a shadow cast *on* the ground instead
+    // of floating up into the air along with the body that casts it.
+    const ghostLift=THREE.MathUtils.clamp(raw.y,0,GHOST_YMAX);
+    ghost.position.set(rp.x+gdx, 0, rp.z+gdz);
+    ghostCore.position.y=.26+ghostLift; ghostHalo.position.y=.26+ghostLift;
     // hide it once the player is standing right on the crossing — reflected
     // through itself it would sit on top of the player, reading as nothing
-    ghost.visible=crossed && Math.max(fa,fb)>.05 && !(got1&&got2) && distX>1;
+    // — and hide it right on either hinge line too: a point on a hinge
+    // reflects to another point on that same hinge, so up close the ghost
+    // clamps onto the very line the raised half is drawn through and reads
+    // as a glitch rather than a mirrored figure.
+    const nearHinge = Math.abs(playerPos.x-CX)<1.2 || Math.abs(playerPos.z-CZ)<1.2;
+    ghost.visible=crossed && Math.max(fa,fb)>.05 && !(got1&&got2) && distX>1 && !nearHinge;
 
-    const latched = fa>.9 && fb>.9;
+    // both edges settled at their target — as opposed to still springing
+    // through the fold, when a gate's own path sweeps through COLLECT_R of
+    // wherever the player happens to be standing on the way to latching
+    const atRest = Math.abs(foldA-foldAT)<.02 && Math.abs(foldB-foldBT)<.02;
     const d1=Math.hypot(playerPos.x-p1.x,playerPos.z-p1.z);
     const d2=Math.hypot(playerPos.x-p2.x,playerPos.z-p2.z);
     if(!got1 && latched && order===0 && d1<COLLECT_R) collect(1,p1);
     if(!got2 && latched && order===1 && d2<COLLECT_R) collect(2,p2);
+    // the corner comes to rest right over the player on a B->A latch — its
+    // image lands behind and above the crossing, off the bottom of the
+    // frame under the normal forward-facing camera. Swing around for a
+    // moment so its arrival is actually seen, once per latch.
+    if(latched && order===1 && !got2){ if(!lookedBackFor1){lookedBackFor1=true; lookBack(1.2);} }
+    else lookedBackFor1=false;
     // the wrong light answers with a dull blip, once per approach — "wrong
-    // one" is learned by doing, no words about order
+    // one" is learned by doing, no words about order. Gated on the folds
+    // being at rest so a gate sweeping through COLLECT_R mid-fold during a
+    // clean, correct pull never reads as a wrong touch.
     const near1=d1<COLLECT_R, near2=d2<COLLECT_R;
-    if(!got1 && order!==0 && near1){ if(!wrongNear1){wrongNear1=true;wrongTouches++;blip(150,.15,.08,'triangle');emitRipple(p1.x,p1.z,.7);} }
+    if(!got1 && order!==0 && near1 && atRest){ if(!wrongNear1){wrongNear1=true;wrongTouches++;blip(150,.15,.08,'triangle');emitRipple(p1.x,p1.z,.7);} }
     else wrongNear1=false;
-    if(!got2 && order!==1 && near2){ if(!wrongNear2){wrongNear2=true;wrongTouches++;blip(150,.15,.08,'triangle');emitRipple(p2.x,p2.z,.7);} }
+    if(!got2 && order!==1 && near2 && atRest){ if(!wrongNear2){wrongNear2=true;wrongTouches++;blip(150,.15,.08,'triangle');emitRipple(p2.x,p2.z,.7);} }
     else wrongNear2=false;
 
-    // every order always delivers *a* gate — there is no "wrong order" state
-    // to warn about. The one real failure is folding it and then wandering:
-    // both latched, standing more than 6 units off the X for 10 seconds.
-    if(curRegion===region && latched && distX>6){
+    // the real dead end: fold both edges up again in an order already
+    // collected (e.g. A->B again after gate 1) and there is no live gate
+    // left to walk to for that order — nothing will ever happen until the
+    // player unfolds and pulls the other one first.
+    const liveGateForOrder = order===0 ? !got1 : !got2;
+    const deadEnd = latched && !liveGateForOrder && !(got1&&got2);
+    if(curRegion===region && deadEnd){
       stuckT += dt;
-      if(stuckT>10 && !promptShown){ promptShown=true; setPrompt('Stand on the crossing.'); }
+      if(stuckT>10 && !promptShown){ promptShown=true; setPrompt('Pull the other one first.'); }
     } else { stuckT=0; if(promptShown){promptShown=false; setPrompt('');} }
+  },
+  constrain(prevX,prevZ,pos,vel){
+    // once an edge is latched, the raised half is drawn right through
+    // whatever stands exactly on its hinge line, and the mirrored self
+    // clamps onto the same line — both read as a glitch. A soft push keeps
+    // the player at least this far off the line, on whichever side they
+    // already were, no thud (just a ripple, and only occasionally — not
+    // every single frame the player leans on the line).
+    const MARGIN=.7;
+    if(Math.max(0,foldA)>.9 && Math.abs(pos.x-CX)<MARGIN){
+      const side=Math.sign(pos.x-CX)||Math.sign(prevX-CX)||1;
+      pos.x=CX+side*MARGIN; vel.x=0;
+      if(clock.elapsedTime-hingeCoolA>.4){hingeCoolA=clock.elapsedTime; emitRipple(CX,pos.z,.4);}
+    }
+    if(Math.max(0,foldB)>.9 && Math.abs(pos.z-CZ)<MARGIN){
+      const side=Math.sign(pos.z-CZ)||Math.sign(prevZ-CZ)||1;
+      pos.z=CZ+side*MARGIN; vel.z=0;
+      if(clock.elapsedTime-hingeCoolB>.4){hingeCoolB=clock.elapsedTime; emitRipple(pos.x,CZ,.4);}
+    }
   },
   onLeave(){
     if(promptShown){promptShown=false; setPrompt('');}
     if(dragA){ try{renderer.domElement.releasePointerCapture(dragAPid);}catch(_){} dragA=false; }
     if(dragB){ try{renderer.domElement.releasePointerCapture(dragBPid);}catch(_){} dragB=false; }
+    pending=false; lookedBackFor1=false;
     foldAT=0; foldBT=0; foldA=0; foldB=0; aVel=0; bVel=0;
     ghost.visible=false;
   },
@@ -381,8 +508,9 @@ region = registerRegion({
   load(d){
     got1=!!d.got1; got2=!!d.got2;
     if(got1) light1.visible=false; if(got2) light2.visible=false;
-    refreshHud();
+    updateDormant(); refreshHud();
   },
   debug(){ return {foldA:+foldA.toFixed(2), foldB:+foldB.toFixed(2), order, got1, got2, wrongTouches,
-    marker1On:marker1.g.visible, marker2On:marker2.g.visible}; }
+    marker1On:marker1.g.visible, marker2On:marker2.g.visible, dormantOn:dormant.g.visible,
+    promptShown, stuckT:+stuckT.toFixed(2)}; }
 });

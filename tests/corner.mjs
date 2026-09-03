@@ -64,35 +64,23 @@ await driveTo(27,0);
   if(d>1)errors.push('walking to the entrance did not land on the crossing (d='+d.toFixed(2)+')'); }
 await page.screenshot({path:'shots/corner-0-arrive.png'});
 
-// item 5: the only real stuck state is both latched and far from the
-// crossing — the old "wrong order" prompt could never actually happen. Do
-// this now, before the rest of the walk here (grid teleports don't count,
-// but every driveTo does) pushes total distance past the *core's own*,
-// unrelated 40-unit "digested" threshold, which posts a one-time 'Follow
-// the lights.' prompt of its own and would otherwise race this one.
-// Latch B-first (order 1) at (24,-2), not the crossing itself: order 1's
-// own gate sweeps as close as ~0.9 units from the crossing *mid-drag*
-// (checked by sampling warp() over the whole fold range, not just its
-// resting fa=fb=1 endpoint — the two hinges compound, so the gate's path
-// arcs through the crossing's own COLLECT_R on the way there), which would
-// auto-collect it right out from under this test; (24,-2) keeps clear of
-// that arc the whole way through, same as the order-toggle test above.
-await driveTo(24,-2);
-await dragEdge('B'); await dragEdge('A');
-s=await st(); if(s.state.foldA<.9||s.state.foldB<.9)errors.push('could not latch both folds for the prompt test: '+JSON.stringify(s.state));
-if(s.state.got1||s.state.got2)errors.push('latching for the prompt test collected a gate by accident: '+JSON.stringify(s.state));
-// (16,-3): still >6 from the crossing, and its straight-line approach from
-// (24,-2) stays a safe ~2.7+ units clear of both (now stationary) gates.
-await driveTo(16,-3);
-await page.waitForTimeout(15500);
-const promptText=await page.evaluate(()=>document.getElementById('prompt').textContent);
-const promptVisible=await page.evaluate(()=>document.getElementById('prompt').style.visibility==='visible');
-console.log('prompt after 15s idle, far from the crossing:',JSON.stringify({promptText,promptVisible}));
-if(!promptVisible||promptText!=='Stand on the crossing.')errors.push('wrong or missing stuck prompt: '+JSON.stringify({promptText,promptVisible}));
-await driveTo(24,-2); await page.waitForTimeout(700);
-const promptVisible2=await page.evaluate(()=>document.getElementById('prompt').style.visibility==='visible');
-if(promptVisible2)errors.push('the prompt did not clear once back near the crossing');
-await tapEdge('B'); await tapEdge('A'); await page.waitForTimeout(1000);   // unfold before the rest of the tests
+// item 5: the grab tie-break at the crossing must not coin-flip on distance.
+// A pointerdown exactly on the intersection followed by a clear vertical
+// drag must always read as edge A — previously a pick this close to both
+// lines was decided by whichever line happened to sit a hair nearer, so a
+// vertical drag starting on a B pick could read as a tap and silently
+// toggle B off instead of folding A.
+{
+  const p=await page.evaluate(()=>window.__DA.project(27,1,0));
+  await page.mouse.move(p.x,p.y); await page.mouse.down();
+  await page.mouse.move(p.x,p.y+300,{steps:20}); await page.mouse.up();
+  await page.waitForTimeout(900);
+  s=await st(); console.log('tie-break drag exactly on the intersection:',JSON.stringify(s.state));
+  if(s.state.foldA<.9)errors.push('a vertical drag exactly on the intersection did not fold A: '+JSON.stringify(s.state));
+  if(s.state.foldB>.1)errors.push('a vertical drag exactly on the intersection touched B: '+JSON.stringify(s.state));
+  await tapEdge('A'); await page.waitForTimeout(1000);   // unfold before the rest of the tests
+  s=await st(); if(s.state.foldA>.05||s.state.foldB>.05)errors.push('could not unfold after the tie-break test: '+JSON.stringify(s.state));
+}
 
 // item 1: the order flag must track the *actual* fold sequence, including a
 // tap-off/tap-on toggle with the other edge still up. Do this off the
@@ -112,7 +100,26 @@ s=await st(); if(s.state.order!==0)errors.push('turning an edge off must not cha
 await tapEdge('A');   // tap back on, with B still up — the newly raised edge is applied last, i.e. B first
 s=await st(); console.log('after tap-off/tap-on A with B still up:',JSON.stringify(s.state));
 if(s.state.order!==1)errors.push('re-raising A while B is still up must flip the order to B-first (1), got '+s.state.order);
-await page.waitForTimeout(900);
+
+// item 1: this is a fresh B->A latch — its own gate lands behind and above
+// the crossing, off the bottom of the frame under the normal forward-facing
+// camera. lookBack() should swing the camera round for a moment so the
+// arrival is actually seen. Poll rather than a fixed wait: the exact instant
+// the folds cross the latch threshold (and so when the look-back starts)
+// isn't pinned down to the millisecond.
+{
+  let sawOnscreen=false;
+  const t0=Date.now();
+  while(Date.now()-t0<3000){
+    const l2=await page.evaluate(()=>window.__DA_corner.light(2));
+    const pr=await page.evaluate(gg=>window.__DA.project(gg.x,gg.y,gg.z),l2);
+    if(pr.x>=0&&pr.x<=390&&pr.y>=0&&pr.y<=844){sawOnscreen=true;break;}
+    await page.waitForTimeout(150);
+  }
+  console.log('B->A gate on screen during the look-back:',sawOnscreen);
+  if(!sawOnscreen)errors.push('the B->A gate never projected inside the 390x844 frame during the look-back');
+}
+
 s=await st(); console.log('settled after the toggle:',JSON.stringify(s.state));
 if(!s.state.marker2On||s.state.marker1On)errors.push('the live marker did not follow the toggled order: '+JSON.stringify(s.state));
 { const l2=await page.evaluate(()=>window.__DA_corner.light(2));
@@ -151,6 +158,16 @@ await page.screenshot({path:'shots/corner-2-both-pulled.png'});
 // correct gate, close enough to trip the wrong-light check without also
 // walking into the right one by accident.
 await driveTo(27,0);
+
+// item 2 (converse): a live, uncollected gate for the current order must
+// never trip the dead-end prompt, no matter how long the player lingers —
+// only the *absence* of a live gate for the order should ever do that.
+await page.waitForTimeout(11500);
+{
+  const promptVisible=await page.evaluate(()=>document.getElementById('prompt').style.visibility==='visible');
+  if(promptVisible)errors.push('the dead-end prompt fired while gate 2 was still a live, uncollected target');
+}
+
 const wrongBefore=await page.evaluate(()=>window.__DA_corner.wrongTouches);
 const l1wrong=await page.evaluate(()=>window.__DA_corner.light(1));
 const l2peek=await page.evaluate(()=>window.__DA_corner.light(2));
@@ -175,12 +192,49 @@ s=await st(); console.log('after walking into the correct light (order 1):',JSON
 if(!s.state.got2)errors.push('light 2 (B->A) not collected');
 if(s.state.foldA>.2||s.state.foldB>.2)errors.push('collecting did not spring the paper back open: '+JSON.stringify(s.state));
 
+// item 3: the dormant marker — once one gate is collected, the *other*
+// one's rest spot should read as present but cold, regardless of what the
+// live order currently is.
+{
+  const dbg=(await st()).state;
+  console.log('dormant marker after the first collect:',JSON.stringify(dbg));
+  if(!dbg.dormantOn)errors.push('no dormant marker after collecting the first gate: '+JSON.stringify(dbg));
+  await page.screenshot({path:'shots/corner-5-dormant.png'});
+}
+
+// item 2: the real dead end — pull B then A again, the same order already
+// collected, and there is no live gate left for it: nothing will ever
+// happen again until the player pulls the other one instead.
+await driveTo(27,0); await page.waitForTimeout(300);
+await dragEdge('B'); await dragEdge('A');
+s=await st(); console.log('re-latched B->A after it was already collected:',JSON.stringify(s.state));
+if(s.state.foldA<.9||s.state.foldB<.9||s.state.order!==1)errors.push('could not re-latch B->A for the dead-end test: '+JSON.stringify(s.state));
+if(s.state.got1||!s.state.got2)errors.push('unexpected collect state going into the dead-end test: '+JSON.stringify(s.state));
+await page.waitForTimeout(11500);
+{
+  const promptText=await page.evaluate(()=>document.getElementById('prompt').textContent);
+  const promptVisible=await page.evaluate(()=>document.getElementById('prompt').style.visibility==='visible');
+  console.log('dead-end prompt after repeating the same order:',JSON.stringify({promptText,promptVisible}));
+  if(!promptVisible||promptText!=='Pull the other one first.')errors.push('wrong or missing dead-end prompt: '+JSON.stringify({promptText,promptVisible}));
+  await page.screenshot({path:'shots/corner-dead-end.png'});
+}
+await tapEdge('B'); await tapEdge('A'); await page.waitForTimeout(1000);   // unfold before the rest of the tests
+{
+  const promptVisible2=await page.evaluate(()=>document.getElementById('prompt').style.visibility==='visible');
+  if(promptVisible2)errors.push('the dead-end prompt did not clear after unfolding');
+  s=await st(); if(s.state.foldA>.05||s.state.foldB>.05)errors.push('could not unfold after the dead-end test: '+JSON.stringify(s.state));
+}
+
 // items 2 + 6: order A->B, latched right at the crossing. Its own gate sits
 // ~0.4 units out — well inside COLLECT_R — so simply finishing the second
 // (B) drag collects it *while the pointer is still down*. That is exactly
 // the "collecting mid-drag" bug: the drag must not half-restore afterward.
 await driveTo(27,0);
 s=await st(); if(s.state.foldA>.05||s.state.foldB>.05)errors.push('folds were not at rest before the A->B test: '+JSON.stringify(s.state));
+// item 4: gate 2's own path sweeps within ~0.6 units of the crossing while
+// B is mid-fold here (checked by sampling warp() along the sweep) — a clean
+// A->B collect must produce zero wrong-touch blips despite that.
+const wrongBeforeClean=await page.evaluate(()=>window.__DA_corner.wrongTouches);
 await dragEdge('A'); s=await st(); if(s.state.foldA<.9||s.state.order!==0)errors.push('edge A did not latch fresh at the crossing: '+JSON.stringify(s.state));
 {
   const p=await edgePoint('B');
@@ -194,6 +248,9 @@ await dragEdge('A'); s=await st(); if(s.state.foldA<.9||s.state.order!==0)errors
   if(!s.state.got1)errors.push('light 1 (A->B) was not collected mid-drag: '+JSON.stringify(s.state));
   if(s.state.foldA>.15||s.state.foldB>.15)errors.push('the paper stayed half-folded after a mid-drag collect: '+JSON.stringify(s.state));
 }
+const wrongAfterClean=await page.evaluate(()=>window.__DA_corner.wrongTouches);
+console.log('wrongTouches across the clean A->B collect:',wrongBeforeClean,'->',wrongAfterClean);
+if(wrongAfterClean!==wrongBeforeClean)errors.push('a clean A->B collect produced a wrong-touch blip: '+wrongBeforeClean+' -> '+wrongAfterClean);
 if(!(await st()).done)errors.push('region not done after both lights');
 await page.screenshot({path:'shots/corner-6-done.png'});
 
