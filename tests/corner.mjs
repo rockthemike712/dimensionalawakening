@@ -18,12 +18,30 @@ async function driveTo(tx,tz,ms=15000){const t0=Date.now();while(Date.now()-t0<m
   for(const k of ks)await page.keyboard.down(k);await page.waitForTimeout(150);for(const k of ALL)await page.keyboard.up(k);}}
 // A: along z at x=27, draws horizontal on screen -> perpendicular drag is vertical (clientY), down = pull.
 // B: along x at z=0, draws vertical on screen -> perpendicular drag is horizontal (clientX).
-// Edge A's aim point tracks the player's own z (offset by 1, clear of the
-// exact A/B tie at the crossing itself) so it never drifts to the edge of a
-// 36-degree portrait frustum once the player is standing close to the
-// crossing, as item 2 now requires for any grab at all; edge B's aim point
-// sits on its own line (z=CZ=0, which every test position here is close to).
-async function edgePoint(which){ const z=(await page.evaluate(()=>window.__DA.pos))[2]; return page.evaluate(([w,zz])=>window.__DA.project(w==='A'?27:24,1,w==='A'?zz+1:0),[which,z]); }
+// Round 5's review (should-fix 6): a *fixed* aim point (player's z + 1 for
+// A, a fixed (24,0) for B) can drift to somewhere unusable depending on
+// exactly where the driveTo's bang-bang controller happened to stop —
+// that's what dropped six consecutive gestures in round 5's run. Instead,
+// project several candidates along the hinge line itself and pick the
+// first one actually on screen from wherever the camera is right now — the
+// tie-break at the crossing (a candidate close to one line reads as that
+// line regardless of exactly how close, see the tests using this above)
+// means any of these candidates is a valid grab point once it is on screen.
+// offset 0 (the exact intersection) is deliberately excluded: at that one
+// point both lines' distance-to-pick is exactly 0, so a tap with no
+// movement (tapEdge) hits the fallback tie-break's own coin-flip case
+// instead of resolving to the edge this helper was asked for. Any nonzero
+// offset keeps this point's distance to its own line at 0 and to the other
+// line at |offset| > 0, which the tie-break always resolves correctly.
+const EDGE_OFFSETS=[1,-1,2,-2,1.5,-1.5,3,-3,4,-4,5,-5,6,-6];
+async function edgePoint(which){
+  for(const d of EDGE_OFFSETS){
+    const [wx,wz] = which==='A' ? [27,d] : [27+d,0];
+    const p=await page.evaluate(([xx,zz])=>window.__DA.project(xx,1,zz),[wx,wz]);
+    if(p.x>=20 && p.x<=370 && p.y>=40 && p.y<=800) return p;
+  }
+  throw new Error('edgePoint('+which+'): no on-screen candidate found along the hinge line');
+}
 // occasionally, under this environment's headless timing, a single mouse
 // down/move/up sequence doesn't register as a drag at all (the fold target
 // comes back unchanged) — not a corner.js issue, a Playwright/input-timing
@@ -35,6 +53,9 @@ async function dragEdgeOnce(which){
   if(which==='A')await page.mouse.move(p.x,p.y+300,{steps:20}); else await page.mouse.move(p.x-260,p.y,{steps:20});
   await page.mouse.up(); await page.waitForTimeout(1500);
 }
+// round 5, should-fix 6: a gesture that never registers, even after
+// retries, must fail loudly and by name — not silently fall through to
+// whatever assertion happens to run next, which then names the wrong bug.
 async function dragEdge(which,tries=3){
   const before=(await st()).state[which==='A'?'foldA':'foldB'];
   for(let i=0;i<tries;i++){
@@ -43,12 +64,19 @@ async function dragEdge(which,tries=3){
     if(Math.abs(after-before)>=.05) return;
     console.log('drag on edge',which,'did not register (fold stayed at',after,'), attempt',i+1,'of',tries);
   }
+  throw new Error('gesture never registered: drag on edge '+which+' after '+tries+' attempts');
 }
 async function tapEdge(which){
   const p=await edgePoint(which);
   await page.mouse.move(p.x,p.y); await page.mouse.down(); await page.mouse.up();
   await page.waitForTimeout(200);
 }
+// round 5, should-fix 6: a gesture (or aim point) that never registers now
+// throws instead of silently falling through — wrap the whole run so that
+// exception is reported as a clear, named failure rather than crashing the
+// process past the browser cleanup and the ERRORS summary below.
+try {
+
 let s=await st(); console.log('arrived:',JSON.stringify(s));
 if(!s||!s.built)errors.push('corner not built');
 
@@ -213,6 +241,17 @@ await page.screenshot({path:'shots/corner-2-both-pulled.png'});
   const hiddenNearCrossing=await page.evaluate(()=>window.__DA_corner.ghost());
   if(hiddenNearCrossing.visible)errors.push('the mirrored self should hide within 1 unit of the crossing: '+JSON.stringify(hiddenNearCrossing));
   { const st2=await st(); if(st2.state.got2)errors.push('standing near the crossing to test ghost-hiding collected gate 2 by accident: '+JSON.stringify(st2.state)); }
+
+  // round 5, finding 3 (blocker) / should-fix 6: a normal standing spot a
+  // couple of units off the crossing (not on either hinge, not right on top
+  // of it, and outside COLLECT_R of either gate so this check can't
+  // accidentally consume one) must actually show the mirrored self — round
+  // 5 found it invisible from every position east of x=24, which is every
+  // position a player actually plays from.
+  await page.evaluate(()=>window.__DA.setPos(26,2)); await page.waitForTimeout(300);
+  const gcross=await page.evaluate(()=>window.__DA_corner.ghost());
+  console.log('ghost near the crossing (26,2):',JSON.stringify(gcross));
+  if(!gcross.visible)errors.push('the mirrored self is not visible from a normal standing spot near the crossing: '+JSON.stringify(gcross));
 }
 
 // wrong light / correct light for this order (B first, A second) — gate 1
@@ -293,12 +332,32 @@ await tapEdge('B'); await tapEdge('A'); await page.waitForTimeout(1000);   // un
   s=await st(); if(s.state.foldA>.05||s.state.foldB>.05)errors.push('could not unfold after the dead-end test: '+JSON.stringify(s.state));
 }
 
-// finding 3: order A->B, latched right at the crossing. Its gate used to
-// sit ~0.4 units out — well inside COLLECT_R — so simply finishing the
-// second (B) drag collected it *while the pointer was still down*, and the
-// corner's arrival was never seen. Moved to 2.38 units out: the latch must
-// NOT collect it — the delivery is watched, sitting there uncollected,
-// marker lit — and it is collected only once the player actually walks in.
+// round 5, finding 1 (blocker) / should-fix 6: collection requires an
+// approach, verified from three spots. (27.5,-1.5) and (28,-1) both sit
+// *inside* COLLECT_R of the A->B gate's own rest point (0.88 and 1.50 units
+// away respectively) — exactly the geometry round 5's review found
+// instantly collecting the gate the moment the second edge latched, with
+// the corner's arrival never seen. Latching A->B from each of those two
+// spots must leave got1 false; only the third spot, (27,0) — always outside
+// COLLECT_R (2.40 units) — actually watches the delivery and then delivers
+// it once walked into, which is also what the rest of this file needs: gate
+// 1 has to end up collected here to reach done() below.
+async function latchAB(){ await dragEdge('A'); await dragEdge('B'); }
+async function unfoldAB(){ await tapEdge('A'); await tapEdge('B'); await page.waitForTimeout(1000); }
+for(const [sx,sz] of [[27.5,-1.5],[28,-1]]){
+  await page.evaluate(([xx,zz])=>window.__DA.setPos(xx,zz),[sx,sz]); await page.waitForTimeout(300);
+  await latchAB();
+  s=await st();
+  console.log('latch A->B parked at ('+sx+','+sz+'), inside COLLECT_R of the rest point:',JSON.stringify(s.state));
+  if(s.state.foldA<.9||s.state.foldB<.9)errors.push('could not latch A->B parked at ('+sx+','+sz+'): '+JSON.stringify(s.state));
+  if(s.state.got1)errors.push('the A->B gate collected itself at the latch while parked at ('+sx+','+sz+'), inside COLLECT_R of its rest point: '+JSON.stringify(s.state));
+  await unfoldAB();
+  s=await st(); if(s.state.got1)errors.push('got1 became true merely from unfolding, parked at ('+sx+','+sz+')');
+}
+
+// the third spot: (27,0), always outside COLLECT_R of the A->B rest point —
+// latch, confirm still uncollected (the delivery is watched), then actually
+// walk in and confirm it becomes true.
 await driveTo(27,0);
 s=await st(); if(s.state.foldA>.05||s.state.foldB>.05)errors.push('folds were not at rest before the A->B test: '+JSON.stringify(s.state));
 const wrongBeforeClean=await page.evaluate(()=>window.__DA_corner.wrongTouches);
@@ -339,6 +398,11 @@ if(s.state.foldA!==0||s.state.foldB!==0)errors.push('leaving did not reset the f
 // save / continue
 await page.evaluate(()=>window.__DA.save()); await page.reload({waitUntil:'networkidle'}); await page.waitForTimeout(800); await page.tap('#resumeYes'); await page.waitForTimeout(800);
 s=await st(); console.log('after continue:',JSON.stringify(s)); if(!s.done)errors.push('save did not restore done');
+
+} catch(e) {
+  errors.push('EXCEPTION: '+(e&&e.message||String(e)));
+  console.log('EXCEPTION:',e&&e.stack||e);
+}
 
 await browser.close();
 if(errors.length){console.log('ERRORS');errors.forEach(e=>console.log(' - '+e));process.exit(1);} console.log('CORNER OK');
