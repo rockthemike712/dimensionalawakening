@@ -1197,4 +1197,5 @@ window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get s
   digest(){digestedAt=clock.elapsedTime;},unlockRoom(){startStage2();S2.riseT=undefined;s2Group.scale.y=1;},
   setPos(x,z){playerPos.set(x,0,z);velocity.set(0,0,0);},
   get _lm(){return landmarks},get _plane(){return sheetMesh},get flat(){return flat},
+  get residue(){return {flatPulse:+flatPulse.toFixed(2),mirror:pShadow2.visible,shadowHex:pShadow.material.color.getHex(),s2active:S2.active,rise:S2.riseT===undefined?null:+S2.riseT.toFixed(2)}},
   jump3d(){if(!crossed){crossed=true;dimT=clock.elapsedTime-2.5;walked=0;digestedAt=-1;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';}}};
