@@ -2,3 +2,4 @@
 import './thin.js';
 import './corner.js';
 import './lamp.js';
+import './bloom.js';
