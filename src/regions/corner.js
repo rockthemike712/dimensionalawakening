@@ -709,7 +709,11 @@ region = registerRegion({
       if(clock.elapsedTime-hingeCoolA>.4){hingeCoolA=clock.elapsedTime; emitRipple(CX,pos.z,.4);}
     }
     if(Math.max(0,foldB)>.9 && Math.abs(pos.z-CZ)<MARGIN && Math.abs(vel.z)<PARKED){
-      const side=Math.sign(pos.z-CZ)||Math.sign(prevZ-CZ)||-1;
+      // the entrance is on the +z side, so a player who walks to the X and parks a hair
+      // past the line gets settled on the raised half of B — and in the A-then-B order the
+      // delivered light rests on the ground half, at the very edge of the frame from there.
+      // While that light is still waiting, a parked player settles on its side of the hinge.
+      const side=(order===0&&!got1&&Math.max(0,foldA)>.9)?-1:(Math.sign(pos.z-CZ)||Math.sign(prevZ-CZ)||-1);
       pos.z=CZ+side*MARGIN; vel.z=0;
       if(clock.elapsedTime-hingeCoolB>.4){hingeCoolB=clock.elapsedTime; emitRipple(pos.x,CZ,.4);}
     }

@@ -433,6 +433,26 @@ if(s.state.foldA!==0||s.state.foldB!==0)errors.push('leaving did not reset the f
 await page.evaluate(()=>window.__DA.save()); await page.reload({waitUntil:'networkidle'}); await page.waitForTimeout(800); await page.tap('#resumeYes'); await page.waitForTimeout(800);
 s=await st(); console.log('after continue:',JSON.stringify(s)); if(!s.done)errors.push('save did not restore done');
 
+// the experience edit (finding 9, second half): the entrance is on the +z side, so a
+// real player walks to the X from +z and parks a hair past hinge B's line. The hinge
+// safety used to settle them on the raised half, from where the A->B light projected
+// at x~12px, clipped by the frame edge. While that light is still waiting, a parked
+// player now settles on its side of the hinge. Fresh page, park at z=+0.4, fold A then B.
+await page.evaluate(()=>window.__DA.clearSave()); await page.reload({waitUntil:'networkidle'}); await page.waitForTimeout(800);
+await page.evaluate(()=>{window.__DA.jump3d();window.__DA.setPos(17,0);window.__DA.digest();}); await page.waitForTimeout(1200);
+await page.evaluate(()=>window.__DA.setPos(26.7,0.4)); await page.waitForTimeout(1200);
+await dragEdge('A'); await dragEdge('B'); await page.waitForTimeout(2500);
+{
+  const pos=await page.evaluate(()=>window.__DA.pos); s=await st();
+  const g=await page.evaluate(()=>window.__DA_corner.gateRenderPos(1));
+  const proj=await page.evaluate(gg=>window.__DA.project(gg.x,gg.y,gg.z),g);
+  console.log('parked at z=+0.4, A then B: settled at',pos.map(v=>+v.toFixed(2)),'state',JSON.stringify(s.state),'gate1 proj',JSON.stringify(proj));
+  if(!(s.state.foldA>.9&&s.state.foldB>.9&&s.state.order===0))errors.push('could not latch A->B parked at z=+0.4: '+JSON.stringify(s.state));
+  if(!(pos[2]<0))errors.push('parked on the +z side, the A->B latch left the player on the raised half of hinge B (z='+pos[2].toFixed(2)+') where the delivered light is clipped by the frame');
+  if(proj.x<70||proj.x>280||proj.y<200||proj.y>700)errors.push('gate1 projects outside the readable band from the +z parking spot: '+JSON.stringify(proj));
+  if(!s.state.armed1)errors.push('the A->B light did not arm from the +z parking spot: '+JSON.stringify(s.state));
+}
+
 } catch(e) {
   errors.push('EXCEPTION: '+(e&&e.message||String(e)));
   console.log('EXCEPTION:',e&&e.stack||e);

@@ -113,6 +113,14 @@ collect radius. Dead centre is not reachable without either breaking the
 approach guard or lifting the light out the top of the frame; the comment on
 `RAW1` carries the derivation.
 
+The rest point was only half of it. The Corner's entrance is on the +z side,
+so a real player walks to the X from +z and parks a hair past hinge B's
+line, and the hinge safety settled them on the *raised* half, from where the
+delivered light projected at x≈12 px, clipped. That is the frame the judge
+saw. While that light is still waiting, a parked player now settles on its
+side of the hinge (the ground half, a 1.4-unit nudge with the same ripple),
+so both parking sides give the same in-frame result.
+
 ### Tests
 
 `tests/act1.mjs` now earns the digest instead of faking it, asserts the
