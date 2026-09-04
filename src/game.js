@@ -213,7 +213,7 @@ export const planeMat=new THREE.ShaderMaterial({
       float ampBase=mix(.035,.32,uAwake)*calmK*(1.0-coh*.92)*edgeFade;
       vec2 w=warp2(position.xz,ampBase,uTime,uWake);
       vWarp=w;
-      p.x+=w.x; p.z+=w.y; p.y+=(abs(w.x)+abs(w.y))*.12;   // mostly a warp in the plane: a taller swell hides the shadows at the player's and the reeds' feet
+      p.x+=w.x; p.z+=w.y;   // a warp in the plane only: any swell in height would lift the floor over the shadows, rails and markers that lie a few centimetres above it
       if(p.x>0.0){ float x=p.x; p.x=cos(theta)*x; p.y+=sin(theta)*x; }
       // the room's second edge only folds the room's own floor (masked in z and x)
       float t2=uFold2*.62*(1.0-smoothstep(6.5,8.5,abs(position.z)))*(1.0-smoothstep(11.5,12.5,position.x));
@@ -297,14 +297,122 @@ seamWall.rotation.y=Math.PI/2; seamWall.position.y=1.3; world.add(seamWall);
 const seamGrab=new THREE.Mesh(new THREE.BoxGeometry(3.4,5,56),new THREE.MeshBasicMaterial({visible:false}));
 seamGrab.position.y=1; world.add(seamGrab);
 
+// ---------- FORM: soft, drifting edges on reeds/player/lights ----------
+// Tiny onBeforeCompile additions to the existing materials, not a swap to a
+// new material type: color, opacity, emissiveIntensity etc. still work
+// exactly as before for the code elsewhere (regions poke .material.opacity
+// directly on lights). uFGate is set per frame by the caller to fade the
+// effect in with awakening and calm it when flat/2D.
+function formEdge(material,{seed=0,speed=.05,wobble=0,harm=0}={}){
+  material.customProgramCacheKey=()=>'formEdge|'+wobble+'|'+harm;   // the hook bakes these into the GLSL; three caches programs by the hook's source text otherwise
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.uFT={value:0};shader.uniforms.uFGate={value:0};
+    shader.uniforms.uFSeed={value:seed};shader.uniforms.uFSpeed={value:speed};shader.uniforms.uFHarm={value:harm};
+    const extra=[];
+    if(wobble)extra.push(`transformed+=normal*(${wobble.toFixed(5)}*uFGate)*sin(uFT*.6+position.x*2.3+position.y*1.7+position.z*1.9+uFSeed);`);
+    if(harm)extra.push(`{float fAng=atan(position.y,position.x);transformed.xy*=1.0+.06*uFGate*sin(uFHarm*fAng+uFT*.6+uFSeed);}`);
+    shader.vertexShader=shader.vertexShader
+      .replace('#include <common>','#include <common>\nvarying vec3 vFN;varying vec3 vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;uniform float uFHarm;')
+      .replace('#include <begin_vertex>',`#include <begin_vertex>
+        ${extra.join('\n')}
+        vFN=normalize(normalMatrix*normal);vFV=normalize(-(modelViewMatrix*vec4(position,1.0)).xyz);`);
+    shader.fragmentShader=shader.fragmentShader
+      .replace('#include <common>','#include <common>\nvarying vec3 vFN;varying vec3 vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;uniform float uFSpeed;')
+      .replace('#include <dithering_fragment>',`{
+        float fFres=pow(1.0-max(dot(normalize(vFN),normalize(vFV)),0.0),1.7);
+        vec3 fRim=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*uFSpeed+uFSeed));
+        gl_FragColor.rgb=mix(gl_FragColor.rgb,fRim,fFres*uFGate*.8);
+      }
+      #include <dithering_fragment>`);
+    material.userData.uF=shader.uniforms;
+  };
+}
+// a flat annulus (RingGeometry): the radius breathes around its circumference
+// and a thin rainbow fringe sits on the inner and outer edge, not the fill
+function formRing(material,{seed=0,harm=3}={}){
+  material.customProgramCacheKey=()=>'formRing';
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.uFT={value:0};shader.uniforms.uFGate={value:0};
+    shader.uniforms.uFSeed={value:seed};shader.uniforms.uFHarm={value:harm};
+    shader.vertexShader=shader.vertexShader
+      .replace('#include <common>','#include <common>\nvarying float vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;uniform float uFHarm;')
+      .replace('#include <begin_vertex>',`#include <begin_vertex>
+        vFV=uv.y;
+        {float fAng=atan(position.y,position.x); transformed.xy*=1.0+.06*uFGate*sin(uFHarm*fAng+uFT*.6+uFSeed);}`);
+    shader.fragmentShader=shader.fragmentShader
+      .replace('#include <common>','#include <common>\nvarying float vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;')
+      .replace('#include <dithering_fragment>',`{
+        float fIn=1.0-smoothstep(0.0,.4,vFV), fOut=smoothstep(.6,1.0,vFV);
+        vec3 cIn=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*.08+uFSeed));
+        vec3 cOut=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*.08+uFSeed+.5));
+        float fFr=clamp(fIn+fOut,0.0,1.0);
+        gl_FragColor.rgb=mix(gl_FragColor.rgb,cIn*fIn+cOut*fOut,fFr*uFGate*.85);
+      }
+      #include <dithering_fragment>`);
+    material.userData.uF=shader.uniforms;
+  };
+}
+// a light's torus ring: same radius-breathing, but its UV wraps around the
+// tube (0/1 is the outer lip, .5 is the inner lip) so the two-tone fringe
+// needs a cyclic split rather than the flat ring's linear one
+function formTorusRing(material,{seed=0,harm=3}={}){
+  material.customProgramCacheKey=()=>'formTorusRing';
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.uFT={value:0};shader.uniforms.uFGate={value:0};
+    shader.uniforms.uFSeed={value:seed};shader.uniforms.uFHarm={value:harm};
+    shader.vertexShader=shader.vertexShader
+      .replace('#include <common>','#include <common>\nvarying float vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;uniform float uFHarm;')
+      .replace('#include <begin_vertex>',`#include <begin_vertex>
+        vFV=uv.y;
+        {float fAng=atan(position.y,position.x); transformed.xy*=1.0+.06*uFGate*sin(uFHarm*fAng+uFT*.6+uFSeed);}`);
+    shader.fragmentShader=shader.fragmentShader
+      .replace('#include <common>','#include <common>\nvarying float vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;')
+      .replace('#include <dithering_fragment>',`{
+        float fOut=.5+.5*cos(6.2831*vFV), fIn=1.0-fOut;
+        vec3 cOut=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*.08+uFSeed));
+        vec3 cIn=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*.08+uFSeed+.5));
+        gl_FragColor.rgb=mix(gl_FragColor.rgb,cOut*fOut+cIn*fIn,uFGate*.6);
+      }
+      #include <dithering_fragment>`);
+    material.userData.uF=shader.uniforms;
+  };
+}
+// the 2D disc: a soft chromatic edge instead of a hard cut
+function formDisc(material,{seed=0,radius=.42}={}){
+  material.customProgramCacheKey=()=>'formDisc|'+radius;
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.uFT={value:0};shader.uniforms.uFGate={value:0};shader.uniforms.uFSeed={value:seed};
+    shader.vertexShader=shader.vertexShader
+      .replace('#include <common>','#include <common>\nvarying vec2 vFXY;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;')
+      .replace('#include <begin_vertex>','#include <begin_vertex>\nvFXY=position.xy;');
+    shader.fragmentShader=shader.fragmentShader
+      .replace('#include <common>','#include <common>\nvarying vec2 vFXY;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;')
+      .replace('#include <dithering_fragment>',`{
+        float r=length(vFXY)/${radius.toFixed(4)};
+        float edge=smoothstep(.7,.86,r)*(1.0-smoothstep(.9,1.05,r));
+        float hue=uFT*.15+atan(vFXY.y,vFXY.x)*.3+uFSeed;
+        vec3 rc=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+hue));
+        gl_FragColor.rgb=mix(gl_FragColor.rgb,rc,edge*uFGate*.85);
+        gl_FragColor.a*=1.0-smoothstep(.92,1.05,r)*.55;
+      }
+      #include <dithering_fragment>`);
+    material.userData.uF=shader.uniforms;
+  };
+}
+
 // ---------- player: a flat disc in 2D, a sphere in 3D ----------
-const pDisc=new THREE.Mesh(new THREE.CircleGeometry(.42,40),new THREE.MeshBasicMaterial({color:0xeaffff}));
+const pDisc=new THREE.Mesh(new THREE.CircleGeometry(.42,40),new THREE.MeshBasicMaterial({color:0xeaffff,transparent:true}));
+formDisc(pDisc.material,{seed:Math.random()*6.28,radius:.42});
 pDisc.rotation.x=-Math.PI/2;pDisc.position.y=.08;
 const pRing=new THREE.Mesh(new THREE.RingGeometry(.55,.66,48),
   new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.55,side:THREE.DoubleSide}));
+formRing(pRing.material,{seed:Math.random()*6.28,harm:3});
 pRing.rotation.x=-Math.PI/2;pRing.position.y=.07;
 const pCore=new THREE.Mesh(new THREE.IcosahedronGeometry(.36,2),
   new THREE.MeshStandardMaterial({color:0xdfffff,emissive:0x49e9ff,emissiveIntensity:3,roughness:.18,metalness:.15}));
+// a thin iridescent rim + a very subtle wobble (<=3% of the .36 radius); the
+// white core underneath is untouched so the player stays the brightest thing
+formEdge(pCore.material,{seed:Math.random()*6.28,speed:.04,wobble:.36*.025});
 const pHalo=new THREE.Mesh(new THREE.SphereGeometry(.6,24,24),
   new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.075,blending:THREE.AdditiveBlending,depthWrite:false}));
 const pShadow2=new THREE.Mesh(new THREE.CircleGeometry(.5,32),new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:.22}));
@@ -334,6 +442,7 @@ export function makeLight(pos,color=0x62ffff){
  core.scale.setScalar(1.65);
  const ring=new THREE.Mesh(new THREE.TorusGeometry(.58,.035,8,64),
    new THREE.MeshBasicMaterial({color,transparent:true,opacity:.65}));
+ formTorusRing(ring.material,{seed:Math.random()*6.28,harm:3});
  ring.rotation.x=Math.PI/2; ring.scale.setScalar(1.35); g.add(core,ring);
  const beam=new THREE.Mesh(new THREE.CylinderGeometry(.12,.38,12,24,1,true),
    new THREE.MeshBasicMaterial({color,transparent:true,opacity:.18,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
@@ -353,6 +462,7 @@ function animateLight(g,t,active,dimv=dim){
  u.core.scale.y=1.65*THREE.MathUtils.lerp(.35,1,dimv);
  u.beam.visible=active&&dimv>.2; u.glow.visible=active;
  if(active)u.beam.material.opacity=.13+.10*(.5+.5*Math.sin(t*3.2+u.t0));
+ const rf=u.ring.material.userData.uF; if(rf){rf.uFT.value=t;rf.uFGate.value=.3+.7*awakened;}
 }
 function currentTarget(){for(let i=0;i<seedData.length;i++)if(!seedData[i].taken)return i;return -1;}
 const guideLine=new THREE.Line(
@@ -382,12 +492,16 @@ export function makeLandmark(x,z,h,grow=false){
  if(!LM_GEO[key]){const g=new THREE.CylinderGeometry(.09,.1+h*.07,h,6); g.translate(0,h/2,0); LM_GEO[key]=g; LM_BAND[key]=new THREE.TorusGeometry(.16+h*.07,.035,6,14);}
  const m=new THREE.Mesh(LM_GEO[key],new THREE.MeshStandardMaterial({color:col.clone().multiplyScalar(.28),
    emissive:col.clone().multiplyScalar(.55),emissiveIntensity:1,roughness:.72,metalness:.3}));
+ // the body colour stays the note; a fresnel rim carries its own slow hue drift on top
+ formEdge(m.material,{seed:Math.random()*6.28,speed:.02+Math.random()*.03});
  const band=new THREE.Mesh(LM_BAND[key],
    new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0,depthWrite:false}));
  band.rotation.x=Math.PI/2; band.visible=false;
  const pivot=new THREE.Group(); pivot.add(m,band); world.add(pivot);
  const l={pivot,m,band,x,z,h,note,col,freq:lmFreq(h),bx:0,bz:0,bvx:0,bvz:0,ring:0,white:0,bandT:-99,
-   inside:false,pair:null,thread:null,grow:grow?0:1,lean:0};
+   inside:false,pair:null,thread:null,grow:grow?0:1,lean:0,
+   // its own slow phase: height/girth breathe out of phase, the tip drifts independent of the brush spring
+   breathP:Math.random()*6.28,breathAmp:.06+Math.random()*.04,driftP:Math.random()*6.28,driftAmp:.07+Math.random()*.06};
  landmarks.push(l); return l;
 }
 { // the first three reeds on each side of the edge always hold an octave and a fifth
@@ -464,6 +578,8 @@ const lmUp=new THREE.Vector3();
 function updateLandmarks(dt,t){
  const th=fold*1.42; lmUp.set(-Math.sin(th),Math.cos(th),0);
  const sy=THREE.MathUtils.lerp(.04,1,shape());
+ const calm=shape();                                  // 0 on the page and while flat, 1 in full 3D
+ const reedGate=(.12+.88*calm)*(.4+.6*awakened);       // rim: faint on the page, full once awake
  for(const l of landmarks){
    l.lean=Math.max(0,l.lean-dt*1.6);
    // the field answers a near player: reeds lean off your path and ease back
@@ -486,10 +602,15 @@ function updateLandmarks(dt,t){
    if(l.x<=0)l.pivot.position.set(l.x,0,l.z); else l.pivot.position.copy(foldedPoint(_lp.set(l.x,0,l.z)));
    l.pivot.rotation.z=l.x<=0?0:th;
    const sink=l.sunk?1-ease((t-l.sinkT)/1.6):0; l.pivot.visible=sink<1;
-   l.m.scale.y=Math.max(.001,sy*ge*(1-sink)); l.m.scale.x=l.m.scale.z=1+l.ring*.12*(1-dim)+(1-ge)*.4;
-   l.m.rotation.x=l.bz*.55*dim; l.m.rotation.z=-l.bx*.55*dim;
+   // height and girth breathe out of phase, scaled down to nothing on the page/flat
+   const bh=1+l.breathAmp*calm*Math.sin(t*.55+l.breathP), bg=1+l.breathAmp*calm*Math.sin(t*.55+l.breathP+2.4);
+   l.m.scale.y=Math.max(.001,sy*ge*(1-sink)*bh); l.m.scale.x=l.m.scale.z=(1+l.ring*.12*(1-dim)+(1-ge)*.4)*bg;
+   // a slow lean, independent of the brush spring, added to it — the tip drifts a little
+   const dft=l.driftAmp*calm, ldx=Math.sin(t*.17+l.driftP)*dft, ldz=Math.cos(t*.13+l.driftP*1.7)*dft;
+   l.m.rotation.x=(l.bz+ldz)*.55*dim; l.m.rotation.z=-(l.bx+ldx)*.55*dim;
    const lit=l.ring>0||l.white>0||l.lean>.03;
    if(lit||l.lit){l.m.material.emissiveIntensity=1+l.ring*2.6+l.white*3+l.lean*.5;l.m.material.emissive.copy(l.col).multiplyScalar(.55).lerp(WHITE,l.white);l.lit=lit;}
+   const rf=l.m.material.userData.uF; if(rf){rf.uFT.value=t;rf.uFGate.value=reedGate;}
    const bf=(t-l.bandT)*2.6/Math.max(.4,l.h);
    if(bf>=0&&bf<1&&dim>.3){l.band.visible=true;l.band.position.y=bf*l.h*sy;l.band.material.opacity=(1-bf)*.9*dim;}
    else l.band.visible=false;
@@ -981,6 +1102,12 @@ function updatePlayer(dt,t){
  player.scale.setScalar(THREE.MathUtils.lerp(portraitMode()?1.5:1,1,sh));
  p3.rotation.y+=dt*(.7+awakened*1.8);
  pHalo.scale.setScalar(1+.08*Math.sin(performance.now()*.004));
+ // the player's chromatic fringes: faint on the page, fuller as awakening grows
+ const gateDisc=.3+.7*awakened, gateCore=.4+.6*awakened;
+ const uD=pDisc.material.userData.uF, uR=pRing.material.userData.uF, uC=pCore.material.userData.uF;
+ if(uD){uD.uFT.value=t;uD.uFGate.value=gateDisc;}
+ if(uR){uR.uFT.value=t;uR.uFGate.value=gateDisc;}
+ if(uC){uC.uFT.value=t;uC.uFGate.value=gateCore;}
 }
 
 function updateSeeds(t){
