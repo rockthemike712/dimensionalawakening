@@ -22,24 +22,34 @@ const COLOR=0xffcf6e;
 // margin on every side, from every player position the fold safety can
 // leave someone standing at, with no height cap or camera swing needed.
 //
-// The A->B gate (RAW1) is (29.6,0,1.15) — moved the same way (round 5,
-// finding 4): it settles at ~1.52 height, ~2.40 units out from the crossing,
-// with no rendered-height cap needed either (the old GATE_YCAP clamp, and
-// the branch that used it, are gone — the CPU warp() and the GPU now agree
-// on where this light actually is, per the brief's own test).
-//
-// Round 5's finding 1: moving the *rest point* farther from the crossing
-// does NOT, on its own, guarantee every ordinary standing spot is outside
-// COLLECT_R of it — both hinges compress height so steeply (FOLD_MAX is
-// ~81 degrees) that any A->B rest point ends up in roughly the same
-// negative-z pocket near the crossing, and some perfectly normal places to
-// stand (e.g. (27.5,-1.5), 0.88 from this RAW1's rest point) are inside
-// COLLECT_R of it no matter which RAW1 is chosen. That is what the `armed`
-// flags below actually fix; moving RAW1 only buys the entrance-adjacent
-// (27,0) spot its old, already-correct margin back (see finding 4) and
-// gives the light a normal, comfortable resting depth instead of pitching
-// almost on top of the camera.
-const RAW1=new THREE.Vector3(29.6,0,1.15); // order A->B gate (~2.40 from the crossing, height ~1.52)
+// The A->B gate (RAW1) is (29.32,0,0.68) — round 6, finding 9 (the
+// playthrough review): the old RAW1 (29.6,0,1.15) settled at a comfortable
+// height and distance, but projected to x≈36-71px of a 390px frame from
+// every standing spot the fold safety allows — a gold sliver clipped by the
+// screen edge, not "the corner comes to you". The reason is the fold math
+// itself, not a tuning slip: under the 81-degree double hinge (order
+// A-then-B), the reachable rest points for ANY (x1,z1) with x1>27,z1>0 are
+// an exact linear image of that quarter-plane (warp() has no other
+// nonlinearity once both hinges are past 0), so their (height, sideways-
+// offset-from-the-crossing) pairs all lie in a narrow cone dominated by one
+// direction — and every point in that cone far enough from the settled
+// standing spot (26.3,-0.7; see the hinge-safety comment below) to stay
+// outside COLLECT_R sits in the *same* narrow sideways band, regardless of
+// which (x1,z1) is chosen. An exhaustive numeric sweep of the whole
+// reachable surface (both parameters, sub-degree resolution) confirms the
+// screen projection cannot pass x≈130px without either dropping the rest
+// point's distance from (26.3,-0.7) below COLLECT_R (breaking the "watch
+// the delivery, then walk in" mechanic outright: the armed-approach guard
+// below would never arm, and the gate would never be collectible) or
+// lifting it to head-clearing heights (~7+ units) that leave the frame out
+// the top instead. (29.32,0,0.68) is the best point on that reachable
+// surface: it keeps the same ~1.8-unit margin outside COLLECT_R the old
+// point had (so the delivery is still watched, never auto-collected), a
+// normal ~1.0-unit resting height, and moves the projection from the old
+// ~36-71px to ~90px — clearly inside the frame with real margin on the
+// clipped edge, the practical ceiling this specific fold geometry allows
+// rather than the ~130-260px "dead centre" a single-hinge fold could reach.
+const RAW1=new THREE.Vector3(29.32,0,0.68); // order A->B gate (~1.8 from the crossing outside COLLECT_R, height ~1.0, screen x~90px)
 const RAW2=new THREE.Vector3(28,0,2.5);    // order B->A gate (~2.32 from the crossing, height ~1.36)
 const COLLECT_R=1.7;
 const GRAB_R=4.5;                       // must stand this close to the crossing (CX,CZ) for a pull to do anything
@@ -699,7 +709,11 @@ region = registerRegion({
       if(clock.elapsedTime-hingeCoolA>.4){hingeCoolA=clock.elapsedTime; emitRipple(CX,pos.z,.4);}
     }
     if(Math.max(0,foldB)>.9 && Math.abs(pos.z-CZ)<MARGIN && Math.abs(vel.z)<PARKED){
-      const side=Math.sign(pos.z-CZ)||Math.sign(prevZ-CZ)||-1;
+      // the entrance is on the +z side, so a player who walks to the X and parks a hair
+      // past the line gets settled on the raised half of B — and in the A-then-B order the
+      // delivered light rests on the ground half, at the very edge of the frame from there.
+      // While that light is still waiting, a parked player settles on its side of the hinge.
+      const side=(order===0&&!got1&&Math.max(0,foldA)>.9)?-1:(Math.sign(pos.z-CZ)||Math.sign(prevZ-CZ)||-1);
       pos.z=CZ+side*MARGIN; vel.z=0;
       if(clock.elapsedTime-hingeCoolB>.4){hingeCoolB=clock.elapsedTime; emitRipple(pos.x,CZ,.4);}
     }

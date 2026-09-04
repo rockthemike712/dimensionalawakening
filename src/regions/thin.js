@@ -3,7 +3,7 @@ import {
   registerRegion, world, playerPos, curRegion,
   emitRipple, blip, slide, chime, pulseFlash, setPrompt, refreshHud,
   makeLight, saveGame, clock, addAwake, flat, setFlat, makeLandmark, player,
-  ease, ringLandmark
+  ease, ringLandmark, lookBack
 } from '../game.js';
 
 // =====================================================================
@@ -85,6 +85,48 @@ const OMEGA = 30, ZETA = 0.4;
 // it, long enough that a wall sitting right behind its own column is still
 // crossable on the same breath.
 const HOLD_TIME = 0.25;
+
+// The walls' own exhale, once the goal is taken: the slotted walls and the
+// gap's dark hole sink below the floor, in the same underdamped spring
+// shape as the squash itself — a small fraction of the frequency (so the
+// sink takes seconds, not tenths of a second) at the same damping ratio
+// (so the same overshoot survives at the slower speed: the walls sink past
+// their final depth, then rise part-way back, instead of just stopping).
+// `wallsRaw` is 0 (up) .. ~1.25 (mid-overshoot, peaking around 1.4s into
+// the spring) .. 1 (settled, retired); `debug().wallsRetired` clamps it to
+// 0..1 for a simple "is it done yet" read, so it undersells how visibly
+// unsettled the walls still are between the peak and the final rest — the
+// screenshots, not this number, are the real check for "does it read".
+//
+// The camera always looks down +x, and every wall/the gap sit *behind* the
+// goal (x<27.6) — sinking them on the goal frame is invisible; the player
+// is facing the wrong way to ever see it. So the spring doesn't start on
+// `goalReached` itself: it starts the moment `lookBack` actually turns the
+// camera around (`wallsShouldSink`, set below), so the sink is mid-motion,
+// on screen, while the corridor is in view. WALL_OMEGA is tuned so that
+// motion is still clearly building at +0.9s into the look-back and near its
+// peak by +1.6s, rather than already flat — see tests/thin.mjs.
+const WALL_OMEGA = 4.0, WALL_ZETA = 0.4;
+const WALL_SINK = 3.4;          // units the wall/hole group sinks when fully retired — well past the floor
+let wallsRaw = 0, wallsVel = 0, wallsShouldSink = false;
+function stepWallSpring(target, dt) {
+  let remaining = Math.min(dt, .25);
+  while (remaining > 1e-6) {
+    const h = Math.min(SPRING_SUBDT, remaining);
+    wallsVel += (target - wallsRaw) * WALL_OMEGA * WALL_OMEGA * h - 2 * WALL_ZETA * WALL_OMEGA * wallsVel * h;
+    wallsRaw += wallsVel * h;
+    remaining -= h;
+  }
+}
+// staggered ripples along the corridor, scheduled once the look-back starts
+// (goal -> wall B -> wall A: the exhale runs *back down* the corridor, not
+// out from it) — game-time, like `hintQueue`, so it survives a slow frame.
+const retireQueue = [];
+// The look-back itself: queued ~0.35s after the live goal event (so the
+// chime and the goal's own ripple land first, uncluttered), fired exactly
+// once, and never on a `load()` of an already-finished save (see `load`
+// below, which sets `wallsRaw=1` directly instead of going through this).
+let pendingLookBack = false, goalLookT0 = -99, lookStartT = -99;
 
 // Each column: standing within `r` of (x,z) sets the flatten target to 1.
 // `r` is the drawn ring (`vr`) exactly — no blanket reach past the glow.
@@ -274,16 +316,24 @@ function buildSideWall(zLine) {
   return { g, panel, rail };
 }
 
+// item C (goal-frame review): the hole plate used to sit at y=-.03 with a
+// height of .06, so its TOP face landed at y=0 — exactly flush with the
+// ground sheet (also y=0). Two coplanar opaque surfaces z-fight, and from
+// the shallow, distant angle the goal-line camera actually views this gap
+// at, that z-fight reads as a black jagged shimmer sandwiched between the
+// two pale rims, not a hole. Recessing it below the floor (also just
+// thematically correct for a "gap in the floor") clears the fight outright.
+const GAP_HOLE_Y0 = -.2, GAP_RIM_Y0 = .02;
 function buildGap() {
   const midX = (GAP_NEAR + GAP_FAR) / 2, depth = Math.abs(GAP_FAR - GAP_NEAR);
   const zMid = (BOUNDS.z0 + BOUNDS.z1) / 2, zSpan = BOUNDS.z1 - BOUNDS.z0;
-  const hole = new THREE.Mesh(new THREE.BoxGeometry(depth, .06, zSpan),
+  const hole = new THREE.Mesh(new THREE.BoxGeometry(depth, .3, zSpan),
     new THREE.MeshBasicMaterial({ color: 0x01030a }));
-  hole.position.set(midX, -.03, zMid); world.add(hole);
+  hole.position.set(midX, GAP_HOLE_Y0, zMid); world.add(hole);
   const rim = (x) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(.12, .05, zSpan),
       new THREE.MeshBasicMaterial({ color: PALE, transparent: true, opacity: .8, blending: THREE.AdditiveBlending, depthWrite: false }));
-    m.position.set(x, .02, zMid); world.add(m); return m;
+    m.position.set(x, GAP_RIM_Y0, zMid); world.add(m); return m;
   };
   gapMesh.rimNear = rim(GAP_NEAR); gapMesh.rimFar = rim(GAP_FAR); gapMesh.hole = hole;
 }
@@ -345,6 +395,7 @@ function animateCosmetics(t, inRegion) {
     }
   }
   while (hintQueue.length && hintQueue[0].at <= t) { const h = hintQueue.shift(); emitRipple(h.x, h.z, h.strong ? 1.1 : .6, HINT_COL); }
+  while (retireQueue.length && retireQueue[0].at <= t) { const r = retireQueue.shift(); emitRipple(r.x, r.z, 1.1, PALE_COL); }
   for (const w of WALLS) {
     if (!w.mesh) continue;
     // while a flat player is stuck off the slot, the slot itself is the brightest thing on the wall:
@@ -374,6 +425,21 @@ function animateCosmetics(t, inRegion) {
       if (flare > 0 && which === (flareSide === 'far' ? 'rimFar' : 'rimNear')) { sx = Math.max(sx, 1 + flare * 1.6); op = Math.max(op, .8 + flare * .5); }
       r.scale.x = sx; r.material.opacity = Math.min(1, op);
     }
+  }
+}
+
+// A. the walls exhale: once the goal is taken, sink the slotted walls (and
+// the gap's dark hole/rims) below the floor with a spring overshoot — the
+// corridor behind the player visibly opens. Runs every frame, in or out of
+// the region, the same way animateCosmetics/animateGoalLight already do, so
+// it keeps animating (and stays retired) even if the player has moved on.
+function animateWallsRetreat(dt) {
+  stepWallSpring(wallsShouldSink ? 1 : 0, dt);
+  const k = Math.max(0, Math.min(1.3, wallsRaw)), kClamped = Math.min(1, k);
+  for (const w of WALLS) { if (w.mesh) w.mesh.g.position.y = -WALL_SINK * k; }
+  if (gapMesh.hole) {
+    gapMesh.hole.position.y = GAP_HOLE_Y0 - WALL_SINK * kClamped;
+    for (const key of RIM_KEYS) gapMesh[key].position.y = GAP_RIM_Y0 - WALL_SINK * kClamped;
   }
 }
 
@@ -448,6 +514,20 @@ const REGION = registerRegion({
     animateCosmetics(t, inRegion);
     updateTwins(t);
     animateGoalLight(t, inRegion, earned);
+    animateWallsRetreat(dt);
+
+    // A: the look-back, ~0.35s after the live goal event (never on load —
+    // `pendingLookBack` is only ever set from the goalReached branch above).
+    // The camera turns to face back down the corridor; that's the exact
+    // moment the wall spring is allowed to start moving, so the sink and
+    // the ripple cascade are both mid-motion while the corridor is in view.
+    if (pendingLookBack && t - goalLookT0 > .35) {
+      pendingLookBack = false;
+      lookBack(2.4);
+      wallsShouldSink = true; lookStartT = t;
+      slide(260, 60, .9, .1);
+      [GOAL.x, ...[...WALLS].reverse().map(w => w.x)].forEach((x, i) => retireQueue.push({ x, z: CZ, at: t + i * .18 }));
+    }
 
     if (inRegion) {
       if (fallActive) tweenFall(p3);
@@ -495,8 +575,12 @@ const REGION = registerRegion({
     // fired "Flatten first." for both, which is wrong for the second case
     // — a flat player doesn't need to be told to do a thing they've
     // already done. The two are mutually exclusive branches on `flat`.
+    // B: once the goal is taken there is no wall left to be stuck at — skip
+    // the whole hint/prompt timer so a player lingering near a retired
+    // wall's old x-position is never told to "Flatten first." for a wall
+    // that no longer exists.
     for (const w of WALLS) {
-      if (w.passed) { w.stuckT = 0; w.alignStuckT = 0; w.hintOn = false; continue; }
+      if (goalReached || w.passed) { w.stuckT = 0; w.alignStuckT = 0; w.hintOn = false; continue; }
       const near = Math.abs(playerPos.x - w.x) < 1.1 && Math.abs(playerPos.z - w.slotZ) < 3.5;
       const aligned = Math.abs(playerPos.z - w.slotZ) < w.half;
       if (near && flat <= .8) {
@@ -533,6 +617,15 @@ const REGION = registerRegion({
       if (d < 1.0 && earned) {
         goalReached = true; chime(); addAwake(.12);
         emitRipple(GOAL.x, GOAL.z, 1.5, PALE_COL); saveGame(); refreshHud();
+        // A: the payoff. One more overshoot pop on the disc itself, right
+        // away — the completion has an immediate, audible counterpart, in
+        // the same language as the toy. The rest (the look-back, the walls
+        // sinking, the ripple cascade, the descending tone) is queued for a
+        // beat later — see the pendingLookBack check below — because the
+        // camera always looks down +x and every wall sits behind the goal;
+        // none of it is visible until the camera actually turns around.
+        holdT = Math.max(holdT, .4); flatVel += 12;
+        pendingLookBack = true; goalLookT0 = t;
       } else if (d < 2.0 && !earned) {
         // item 2: standing on the unearned goal used to do nothing at
         // all. Now it refuses, once per approach (hysteresis on distance
@@ -602,7 +695,11 @@ const REGION = registerRegion({
     // gap's x-span, not only on the frame they crossed into it — a player
     // who *stops* inside it (rather than running through) must still fall
     // if they're full-size, not stand there in the hole.
-    const insideGap = pos.x >= GAP_NEAR && pos.x <= GAP_FAR;
+    // B: once the goal is taken the gap (like the walls, below) stops
+    // catching a full-size player — it has already sunk out of the way, and
+    // the whole point of the exhale is that the corridor behind you is
+    // genuinely open, not just quiet about still being a trap.
+    const insideGap = !goalReached && pos.x >= GAP_NEAR && pos.x <= GAP_FAR;
     if (insideGap) {
       if (flat > .8) {
         const wasOutsideGap = !(prevX >= GAP_NEAR && prevX <= GAP_FAR);
@@ -621,7 +718,12 @@ const REGION = registerRegion({
       }
     }
 
-    for (const w of WALLS) {
+    // B: a retired wall (goalReached) is not walked into at all any more —
+    // there is nothing left on screen to block against, so `constrain` must
+    // agree and simply stop enforcing the slot. The columns keep flattening
+    // the player regardless (COLS above is untouched); only the wall's own
+    // block goes away.
+    if (!goalReached) for (const w of WALLS) {
       const crossing = (prevX - w.x) * (pos.x - w.x) <= 0 && prevX !== pos.x && !(prevX === w.x && pos.x === w.x);
       if (!crossing) continue;
       const allowed = flat > .8 && Math.abs(pos.z - w.slotZ) < w.half;
@@ -646,7 +748,10 @@ const REGION = registerRegion({
     refusalActive = false;
   },
 
-  hud() { return { label: 'SLOTS', n: slotsPassed, total: WALLS.length }; },
+  // A: the counter is a way of telling the player what to want; once the
+  // goal is taken there is nothing left to want, and the environment
+  // (the walls sinking, the light going out) already says so.
+  hud() { return goalReached ? null : { label: 'SLOTS', n: slotsPassed, total: WALLS.length }; },
   done() { return goalReached; },
 
   save() { return { slotsPassed, goalReached, gapCrossed, wallsPassed: WALLS.map(w => w.passed) }; },
@@ -656,6 +761,16 @@ const REGION = registerRegion({
     gapCrossed = !!d.gapCrossed;
     if (Array.isArray(d.wallsPassed)) WALLS.forEach((w, i) => { w.passed = !!d.wallsPassed[i]; });
     if (goalLightGroup) goalLightGroup.visible = !goalReached;
+    // A Continue of an already-finished region must not replay the sink (or
+    // the look-back — pendingLookBack is simply never set here) and must
+    // not leave the walls standing either: land already fully retired.
+    // Loading a save where the goal is NOT yet reached resets the sink back
+    // to "up" too, in case this region instance had already retired them in
+    // a previous life (a fresh `load()` is a clean slate either way, not a
+    // patch onto whatever state happened to be sitting in memory).
+    pendingLookBack = false; goalLookT0 = -99; retireQueue.length = 0;
+    if (goalReached) { wallsRaw = 1; wallsVel = 0; wallsShouldSink = true; lookStartT = -1e6; }
+    else { wallsRaw = 0; wallsVel = 0; wallsShouldSink = false; lookStartT = -99; }
   },
 
   debug() {
@@ -670,6 +785,17 @@ const REGION = registerRegion({
       refusals, sealHits,
       seal: { x0: SEAL_X0, x1: SEAL_X1, loZ: BOUNDS.z0 + .5, hiZ: BOUNDS.z1 - .5 },
       colCFlareOn: clock.elapsedTime - colCFlareT < 2,
+      // clamped to 0..1 for a simple "is it done" read; the unclamped
+      // `wallsRaw` (can run to ~1.25 mid-overshoot) is what actually drives
+      // the sink and is more useful for catching it still in motion.
+      wallsRetired: +Math.max(0, Math.min(1, wallsRaw)).toFixed(2),
+      wallsRaw: +wallsRaw.toFixed(3),
+      // real seconds since the look-back actually started turning the
+      // camera (-1 before it has); the camera itself reaches full backward
+      // view a little under 0.5s in and holds there, well before the sink
+      // finishes — useful for a test to catch a moment that's genuinely
+      // mid-turn, not just "the spring has technically started".
+      sinceLook: wallsShouldSink ? +(clock.elapsedTime - lookStartT).toFixed(2) : -1,
     };
   },
 });

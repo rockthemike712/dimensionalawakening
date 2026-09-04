@@ -174,6 +174,7 @@ async function checkGateVisibleForASecond(label){
 await page.evaluate(()=>window.__DA.setPos(27,0)); await page.waitForTimeout(300);
 await dragEdge('B'); await dragEdge('A');
 s=await st(); if(s.state.foldA<.9||s.state.foldB<.9||s.state.order!==1)errors.push('could not latch B->A fresh at the crossing: '+JSON.stringify(s.state));
+await page.screenshot({path:'shots/corner-gate2-landed.png'});
 await checkGateVisibleForASecond('fresh B->A latch');
 await tapEdge('B'); await tapEdge('A'); await page.waitForTimeout(1000);   // unfold, then do it again — a second, independent fresh latch
 await page.evaluate(()=>window.__DA.setPos(27,0)); await page.waitForTimeout(300);
@@ -370,6 +371,37 @@ if(s.state.foldA<.9||s.state.foldB<.9)errors.push('A->B did not fully latch: '+J
 if(s.state.got1)errors.push('the A->B gate collected itself at the latch instead of being walked into: '+JSON.stringify(s.state));
 if(!s.state.marker1On)errors.push('the delivered A->B gate has no live marker to walk to: '+JSON.stringify(s.state));
 await page.screenshot({path:'shots/corner-6a-AB-delivered-uncollected.png'});
+await page.screenshot({path:'shots/corner-gate1-landed.png'});
+
+// playthrough review, finding 9: gate 1 used to project to x~36-71px of a
+// 390px frame from every standing spot the fold safety allows — a gold
+// sliver clipped by the screen edge, "something happened in the corner of
+// your eye" rather than "the corner comes to you". RAW1 was moved (see the
+// comment on it in corner.js) to push the rest point as far into the frame
+// as the fold geometry allows without weakening the delivery-approach
+// guard above (COLLECT_R's margin from the standing spots the hinge safety
+// converges every one of these three inputs to (26.3,-0.7) — see
+// corner.js's own hinge-safety comment) — check it from all three named
+// spots the same way gate2's on-screen-frames check already does.
+{
+  const spots=[[27,0],[27,-0.7],[26.3,-0.7]];
+  for(const [sx,sz] of spots){
+    await page.evaluate(([xx,zz])=>window.__DA.setPos(xx,zz),[sx,sz]); await page.waitForTimeout(300);
+    const g1now=await page.evaluate(()=>window.__DA_corner.gateRenderPos(1));
+    const proj=await page.evaluate(gg=>window.__DA.project(gg.x,gg.y,gg.z),g1now);
+    console.log('gate1 projection standing at ('+sx+','+sz+'):',JSON.stringify(proj),'gate1 pos',JSON.stringify(g1now));
+    // the fold geometry (see corner.js) makes x~130-260 (dead centre)
+    // physically unreachable without either dropping the rest point's
+    // distance from the settled standing spot below COLLECT_R (which would
+    // silently break the "watch the delivery, then walk in" guard just
+    // above — armed1 would never arm) or lifting the light to head-clearing
+    // heights that leave the frame out the top instead. 70..280 is the
+    // verified, achievable band with that guard intact.
+    if(proj.x<70||proj.x>280)errors.push('gate1 projects outside the readable band standing at ('+sx+','+sz+'): '+JSON.stringify(proj));
+    if(proj.y<200||proj.y>700)errors.push('gate1 projects outside the readable vertical band standing at ('+sx+','+sz+'): '+JSON.stringify(proj));
+  }
+  await driveTo(27,0); await page.waitForTimeout(300);   // back to the taught standing spot before walking in below
+}
 {
   const g1=await page.evaluate(()=>window.__DA_corner.light(1));
   await driveTo(g1.x,g1.z); await page.waitForTimeout(600);
@@ -400,6 +432,26 @@ if(s.state.foldA!==0||s.state.foldB!==0)errors.push('leaving did not reset the f
 // save / continue
 await page.evaluate(()=>window.__DA.save()); await page.reload({waitUntil:'networkidle'}); await page.waitForTimeout(800); await page.tap('#resumeYes'); await page.waitForTimeout(800);
 s=await st(); console.log('after continue:',JSON.stringify(s)); if(!s.done)errors.push('save did not restore done');
+
+// the experience edit (finding 9, second half): the entrance is on the +z side, so a
+// real player walks to the X from +z and parks a hair past hinge B's line. The hinge
+// safety used to settle them on the raised half, from where the A->B light projected
+// at x~12px, clipped by the frame edge. While that light is still waiting, a parked
+// player now settles on its side of the hinge. Fresh page, park at z=+0.4, fold A then B.
+await page.evaluate(()=>window.__DA.clearSave()); await page.reload({waitUntil:'networkidle'}); await page.waitForTimeout(800);
+await page.evaluate(()=>{window.__DA.jump3d();window.__DA.setPos(17,0);window.__DA.digest();}); await page.waitForTimeout(1200);
+await page.evaluate(()=>window.__DA.setPos(26.7,0.4)); await page.waitForTimeout(1200);
+await dragEdge('A'); await dragEdge('B'); await page.waitForTimeout(2500);
+{
+  const pos=await page.evaluate(()=>window.__DA.pos); s=await st();
+  const g=await page.evaluate(()=>window.__DA_corner.gateRenderPos(1));
+  const proj=await page.evaluate(gg=>window.__DA.project(gg.x,gg.y,gg.z),g);
+  console.log('parked at z=+0.4, A then B: settled at',pos.map(v=>+v.toFixed(2)),'state',JSON.stringify(s.state),'gate1 proj',JSON.stringify(proj));
+  if(!(s.state.foldA>.9&&s.state.foldB>.9&&s.state.order===0))errors.push('could not latch A->B parked at z=+0.4: '+JSON.stringify(s.state));
+  if(!(pos[2]<0))errors.push('parked on the +z side, the A->B latch left the player on the raised half of hinge B (z='+pos[2].toFixed(2)+') where the delivered light is clipped by the frame');
+  if(proj.x<70||proj.x>280||proj.y<200||proj.y>700)errors.push('gate1 projects outside the readable band from the +z parking spot: '+JSON.stringify(proj));
+  if(!s.state.armed1)errors.push('the A->B light did not arm from the +z parking spot: '+JSON.stringify(s.state));
+}
 
 } catch(e) {
   errors.push('EXCEPTION: '+(e&&e.message||String(e)));
