@@ -41,7 +41,7 @@ world feedback), **DEAD AIR** (nothing to be curious about), **OVERLOAD**
 | The Lamp: pull, walk, the shadow crosses | MAGIC | your shadow standing on the far side of a trench you cannot cross | unchanged |
 | Hold the eye, the swap, the look-back | MAGIC | you are on the far side; something still, ring-lit, stands where you were | unchanged |
 | The far light, act done | WORK | a short confirmation walk | unchanged |
-| The room rises | not re-judged | see "deliberately not built" | unchanged |
+| The room rises | OVERLOAD | it fires correctly, and from the Corner side it is a pale untextured mass across the lower frame (the previous judge’s finding 13) | unchanged; the next pass |
 
 ## The three strongest moments
 
@@ -169,4 +169,38 @@ what the on-foot run is for.
 
 ## Evidence from a fresh phone-size run
 
-_(filled in from the final run on the merged tree; see below)_
+One continuous session on the merged tree, on foot, 390×844, `hasTouch`,
+`isMobile`, `deviceScaleFactor:2`, title to the risen room. Every rung was
+earned in the fiction: the edge latched by drag alone (~140 px), the
+crossing fired from walking into the pulled edge, Thin's goal was reached
+after a real fall into the gap and a re-flatten at column C, both Corner
+gates were walked into in both orders, the Lamp's swap fired on the eye
+hold, and `actDone` flipped on the far light. One `setPos` in the whole run,
+to reach a distant reed cluster for a screenshot after a bounded walk timed
+out; no `jump3d`. Zero page or console errors. Frames are in
+`docs/reviews/frames/act1-experience-edit/`.
+
+| beat | wall-clock | what the run saw |
+|---|---|---|
+| Title → first light → edge refused | 0–15 s | as before |
+| Pull the edge, the crossing | 34–54 s | latched at ~140 px; camera falls; **no card across the lower frame at +1 s or +4 s** (`after-crossing-1s.png`, against `before-crossing-1s.png`) |
+| Free play | 54–163 s | digested at 52.9 s and 264 units of real wandering; reeds beside the player lean off the path (`after-field-reeds.png`); walked into the Lamp before Thin and the arrow stayed up, pointing at Thin (`after-lamp-before-thin-arrow.png`) |
+| Thin | 185–263 s | column A squash, column B, a real fall, the put-back, column C flat, the gap crossed, the goal; counter gone at +0.5 s, the turn played (`wallsRaw` 1.04 → 0.99 → 1.01 across the look-back samples), corridor walked back to x≈9 and open (`after-thin-goal-lookback.png` is the suite's mid-turn frame; `after-thin-goal-settled.png` the run's) |
+| Corner | 297–467 s | A then B, gate 1 in frame and walked into; unfold; B then A, gate 2 walked into; done (`after-corner-gate1.png`, and `after-corner-gate1-from-plus-z.png` from the +z parking spot the hinge fix covers, against `before-corner-gate1.png`) |
+| Lamp | 503–544 s | lamp pulled, shadow across the slit, eye held, the swap, the look-back with the old self standing where you were, the far light (`lamp-swap.png`) |
+| The room rises | 549–560 s | `actDone` true, the rise fired while walking back; from the Corner side it is still a pale untextured mass across the lower frame (`room-rise.png`), which is finding 13 of the previous judge, untouched by this pass |
+| Total | 562 s | at headless speed, roughly 5–7 fps |
+
+What the fresh run says about the ten exit criteria in the directive: a
+clean run reaches the room without debug intervention (1); every signpost
+pointed correctly, including from inside the wrong rung (2); no completed
+region obstructed the player, and Thin's corridor walks back (3); the field
+answers movement without a word (4); Thin's squash is still a toy after the
+goal (5); the Corner's first light is in frame from both parking sides (6);
+the swap is legible and eerie (7); the crossing, column A, the Corner's
+second pull and the swap are 5–10 second clips (8); a fresh player's account
+of the escalation was already confirmed by the previous judge and nothing
+here names the math (9); the seam wall's constant presence, Thin's counter
+and walls, the arrow's blanket suppression and the debug hint were removed
+(10). The room's rise is the one thing still short of the bar, and it is
+the next pass.
