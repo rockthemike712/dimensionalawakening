@@ -112,6 +112,14 @@ check(s.region==='thin','not in thin at (7.5,-14): '+s.region); check(!s.arrow,'
 check(!(s.prompt.on&&s.prompt.text==='Follow the lights.'),"'Follow the lights.' still up inside thin");
 await page.evaluate(()=>window.__DA.setPos(3,-4)); await page.waitForTimeout(900);
 s=await snap(); check(s.region===null&&s.arrow,'arrow did not come back in the field: '+JSON.stringify({region:s.region,arrow:s.arrow}));
+// 3b. wandering into a LATER rung during free play (the Lamp is the nearest thing to the
+// crossing) must not silence the only signpost: inside the Lamp with Thin still next, the
+// arrow keeps pointing at Thin
+await page.evaluate(()=>window.__DA.setPos(9,13.5)); await page.waitForTimeout(900);
+s=await snap(); console.log('inside the lamp, next=thin:',JSON.stringify({region:s.region,arrow:s.arrow,next:s.next}));
+check(s.region==='lamp','not in the lamp at (9,13.5): '+s.region); check(s.next==='thin','next is not thin inside the lamp: '+s.next);
+check(s.arrow,'the arrow hid inside the Lamp while Thin was still the next rung');
+await page.evaluate(()=>window.__DA.setPos(3,-4)); await page.waitForTimeout(600);
 
 // 4. Thin done: the arrow moves to the Corner; the stride flattens now and then
 check(await page.evaluate(d=>window.__DA.applySave(d),saveWith({thin:true})),'applySave(thin) refused');

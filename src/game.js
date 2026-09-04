@@ -161,10 +161,11 @@ const MAX_RIP=6;
 export const planeMat=new THREE.ShaderMaterial({
   transparent:true, side:THREE.DoubleSide,
   uniforms:{uTime:{value:0},uFold:{value:0},uFold2:{value:0},uAwake:{value:0},uDim:{value:0},uWorld:{value:new THREE.Vector2(WORLD.x1,WORLD.z1)},
+    uWake:{value:new THREE.Vector2(0,0)},
     uRip:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector4(0,0,-99,0))},
     uRipC:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector3(.2,1,1.1))}},
   vertexShader:`
-    uniform float uTime; uniform float uFold; uniform float uFold2; uniform float uAwake;
+    uniform float uTime; uniform float uFold; uniform float uFold2; uniform float uAwake; uniform float uDim; uniform vec2 uWake;
     uniform vec4 uRip[${MAX_RIP}]; uniform vec3 uRipC[${MAX_RIP}];
     varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC;
     void main(){
@@ -187,6 +188,9 @@ export const planeMat=new THREE.ShaderMaterial({
       float t2=uFold2*.62*(1.0-smoothstep(6.5,8.5,abs(position.z)))*(1.0-smoothstep(11.5,12.5,position.x));
       if(p.x>8.6){ float x=p.x-8.6; float y=p.y; p.x=8.6+cos(t2)*x-sin(t2)*y; p.y=sin(t2)*x+cos(t2)*y; }
       p.y+=sin(length(position.xz)*1.2-uTime*1.8)*.06*(.2+uAwake);
+      // the floor answers being walked on: a shallow dimple under and just behind you
+      float wd=distance(position.xz,uWake);
+      p.y-=uDim*.08*exp(-wd*wd*.5);
       vPos=p;
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);
     }`,
@@ -339,7 +343,7 @@ export function makeLandmark(x,z,h,grow=false){
  band.rotation.x=Math.PI/2; band.visible=false;
  const pivot=new THREE.Group(); pivot.add(m,band); world.add(pivot);
  const l={pivot,m,band,x,z,h,note,col,freq:lmFreq(h),bx:0,bz:0,bvx:0,bvz:0,ring:0,white:0,bandT:-99,
-   inside:false,pair:null,thread:null,grow:grow?0:1};
+   inside:false,pair:null,thread:null,grow:grow?0:1,lean:0};
  landmarks.push(l); return l;
 }
 { // the first three reeds on each side of the edge always hold an octave and a fifth
@@ -417,6 +421,19 @@ function updateLandmarks(dt,t){
  const th=fold*1.42; lmUp.set(-Math.sin(th),Math.cos(th),0);
  const sy=THREE.MathUtils.lerp(.04,1,shape());
  for(const l of landmarks){
+   l.lean=Math.max(0,l.lean-dt*1.6);
+   // the field answers a near player: reeds lean off your path and ease back
+   // through the same spring as a brush, just softer — no ring, no glue
+   if(crossed&&!l.sunk){
+     const dx=l.x-playerPos.x, dz=l.z-playerPos.z, d2=dx*dx+dz*dz;
+     if(d2<9){
+       const d=Math.sqrt(d2)||1e-4, near=1-d/3, k=near*near, sp=velocity.length();
+       let ax=dx/d, az=dz/d;                          // away from you, blended toward your heading so walking parts them
+       if(sp>.3){ax=THREE.MathUtils.lerp(ax,velocity.x/sp,.5);az=THREE.MathUtils.lerp(az,velocity.z/sp,.5);}
+       l.bvx+=ax*k*7*dt; l.bvz+=az*k*7*dt;
+       if(k>l.lean)l.lean=k;
+     }
+   }
    // spring back after a brush
    l.bvx+=(-l.bx*28-l.bvx*3.5)*dt; l.bvz+=(-l.bz*28-l.bvz*3.5)*dt; l.bx+=l.bvx*dt; l.bz+=l.bvz*dt;
    if(l.grow<1)l.grow=Math.min(1,l.grow+dt*1.3);
@@ -427,8 +444,8 @@ function updateLandmarks(dt,t){
    const sink=l.sunk?1-ease((t-l.sinkT)/1.6):0; l.pivot.visible=sink<1;
    l.m.scale.y=Math.max(.001,sy*ge*(1-sink)); l.m.scale.x=l.m.scale.z=1+l.ring*.12*(1-dim)+(1-ge)*.4;
    l.m.rotation.x=l.bz*.55*dim; l.m.rotation.z=-l.bx*.55*dim;
-   const lit=l.ring>0||l.white>0;
-   if(lit||l.lit){l.m.material.emissiveIntensity=1+l.ring*2.6+l.white*3;l.m.material.emissive.copy(l.col).multiplyScalar(.55).lerp(WHITE,l.white);l.lit=lit;}
+   const lit=l.ring>0||l.white>0||l.lean>.03;
+   if(lit||l.lit){l.m.material.emissiveIntensity=1+l.ring*2.6+l.white*3+l.lean*.5;l.m.material.emissive.copy(l.col).multiplyScalar(.55).lerp(WHITE,l.white);l.lit=lit;}
    const bf=(t-l.bandT)*2.6/Math.max(.4,l.h);
    if(bf>=0&&bf<1&&dim>.3){l.band.visible=true;l.band.position.y=bf*l.h*sy;l.band.material.opacity=(1-bf)*.9*dim;}
    else l.band.visible=false;
@@ -1048,6 +1065,8 @@ function animate(){
  fold+=(foldTarget-fold)*(1-Math.pow(.0001,dt));
  roomFold+=(roomFoldTarget-roomFold)*(1-Math.pow(.0005,dt));
  planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;planeMat.uniforms.uFold2.value=roomFold;planeMat.uniforms.uDim.value=dim;
+ // the ground's dimple trails just behind your own heading, not under your feet
+ {const vl=velocity.length(), k=vl>1e-3?.8/vl:0; planeMat.uniforms.uWake.value.set(playerPos.x-velocity.x*k,playerPos.z-velocity.z*k);}
  if(S2.far)S2.far.rotation.z=roomFold*.62;
  if(S2.seam2&&S2.seam2.visible){
    const on=roomFoldTarget>.5;
@@ -1062,7 +1081,7 @@ function animate(){
  }
  seamMat.opacity=.62+.3*Math.sin(t*3.1);
  seamHalo.material.opacity=.09+.06*Math.sin(t*2.2);
- seamWall.material.opacity=.16*dim;
+ seamWall.material.opacity=.16*dim*ease((camera.position.x-.5)/3.5);   // a wall of light only once you look back at it; from the crossing the camera is still west of it and it lay across the frame as a grey band
  if(foldGain)foldGain.gain.value=(fold+roomFold)*.06;
  if(foldOsc)foldOsc.frequency.value=52+fold*40;
  updateCamera(t);
@@ -1083,7 +1102,7 @@ function animate(){
  if(!crossed&&ct>=0)arrowTo=foldedPoint(seedData[ct].p);
  else if(S2.active&&S2.riseT===undefined&&!S2.risePending&&!S2.arrived)arrowTo=S2.center.clone();
  else if(S2.active&&S2.done<S2_NR&&S2.round===3&&roomFold<.5&&curRegion&&curRegion.id==='room')arrowTo=new THREE.Vector3(S2_SEAM2X,1.6,playerPos.z*.4);
- else if(digested()&&!(S2.active&&inRoom()&&S2.done<S2_NR)&&!(curRegion&&ACT1.includes(curRegion.id)&&!(curRegion.done&&curRegion.done()))){
+ else if(digested()&&!(S2.active&&inRoom()&&S2.done<S2_NR)&&!(curRegion&&curRegion===nextRegion())){   // it stands down only inside the rung it points at; wander into a later rung and it keeps pointing
    const next=nextRegion(); if(next&&next!==curRegion)arrowTo=next.entrance?next.entrance.clone():S2.center.clone();
  }
  if(arrowTo){
@@ -1208,9 +1227,9 @@ window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get s
   get regions(){return regions.map(r=>({id:r.id,built:r.built,visited:r.visited,done:!!(r.done&&r.done()),state:r.debug?r.debug():undefined}))},
   save:saveGame,loadSave,applySave,clearSave,
   get actDone(){return actDone()},get digested(){return digested()},get next(){const n=nextRegion();return n?n.id:null},
-  get arrow(){return beaconArrow.style.opacity==='1'},get counterShown(){return countEl.style.opacity!=='0'},
+  get cam(){return camera.position.toArray().map(v=>+v.toFixed(2))},get arrow(){return beaconArrow.style.opacity==='1'},get counterShown(){return countEl.style.opacity!=='0'},
   digest(){digestedAt=clock.elapsedTime;setPrompt(nextRegion()?'Follow the lights.':'');},unlockRoom(){startStage2();S2.riseT=undefined;S2.risePending=false;s2Group.scale.y=1;},
   setPos(x,z){playerPos.set(x,0,z);velocity.set(0,0,0);},
   get _lm(){return landmarks},get _plane(){return sheetMesh},get flat(){return flat},
   get residue(){return {flatPulse:+flatPulse.toFixed(2),mirror:pShadow2.visible,shadowHex:pShadow.material.color.getHex(),s2active:S2.active,risePending:!!S2.risePending,rise:S2.riseT===undefined?null:+S2.riseT.toFixed(2)}},
-  jump3d(){if(!crossed){crossed=true;dimT=clock.elapsedTime-2.5;walked=0;digestedAt=-1;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';}}};
+  jump3d(){if(!crossed){crossed=true;dimT=clock.elapsedTime-2.5;walked=0;digestedAt=-1;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';moveStatus.style.opacity=0;}}};
