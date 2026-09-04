@@ -681,6 +681,47 @@ registerRegion({id:'room',name:'THE ROOM',bounds:{x0:1.4,x1:11.8,z0:-8,z1:8},key
   onLeave(){eyeBtn.style.display='none';eyeLabel.style.display='none';if(S2.active){S2.marker.visible=false;setPrompt('');}},
   done:()=>S2.done>=S2_NR});
 const s2Group=new THREE.Group(); s2Group.visible=false; world.add(s2Group);
+// the room's structure: dark translucent faces carrying the floor's own grid
+// language, cyan lines with a faint rainbow fringe, a fresnel edge glow that
+// brightens the silhouette, gentle time drift. One shared material — the
+// walls, the posts and the screen's back frame all wear it.
+const roomMat=new THREE.ShaderMaterial({
+  transparent:true,side:THREE.DoubleSide,depthWrite:false,
+  uniforms:{uTime:{value:0},uAwake:{value:0}},
+  vertexShader:`
+    varying vec3 vWP; varying vec3 vN; varying vec3 vV;
+    void main(){
+      // world position for the grid (translation only, fine under any scale);
+      // the normal and view vector are done in view space with the built-in
+      // normalMatrix, which is the correct inverse-transpose for whatever
+      // scale is on the mesh — the rise animates scale.y hard, and a raw
+      // mat3(modelMatrix) normal breaks (badly) under that non-uniform scale
+      vec4 wp=modelMatrix*vec4(position,1.0);
+      vWP=wp.xyz;
+      vec4 mvPosition=modelViewMatrix*vec4(position,1.0);
+      vN=normalize(normalMatrix*normal); vV=-mvPosition.xyz;
+      gl_Position=projectionMatrix*mvPosition;
+    }`,
+  fragmentShader:`
+    uniform float uTime; uniform float uAwake;
+    varying vec3 vWP; varying vec3 vN; varying vec3 vV;
+    // a fixed-width line, no fwidth()/derivatives: those go unstable on thin,
+    // near-edge-on or momentarily-degenerate geometry under a software GL
+    // fallback, which is exactly what a rising, non-uniformly-scaled wall is
+    float grid(float x,float s){float d=abs(fract(x/s)-.5)-.5;return 1.-smoothstep(0.0,.06,abs(d));}
+    void main(){
+      float g=max(max(grid(vWP.x,1.0),grid(vWP.z,1.0)),grid(vWP.y,1.0));
+      vec3 col=mix(vec3(.02,.07,.09),vec3(.22,.85,1.0),g*.55);
+      float ph=uTime*.35+vWP.y*1.3;
+      col+=vec3(.10*sin(ph),.07*sin(ph+2.1),.13*sin(ph+4.2))*g;
+      vec3 n=normalize(vN), v=normalize(vV);
+      float fres=pow(1.0-clamp(abs(dot(n,v)),0.0,1.0),2.2);
+      col+=vec3(.15,.95,1.15)*fres*(.55+.25*sin(uTime*.6));
+      col+=vec3(.05,.22,.24)*uAwake*.5;
+      gl_FragColor=vec4(col,clamp(.38+g*.2+fres*.4,0.0,.92));
+    }`
+});
+const edgeMat=new THREE.MeshBasicMaterial({color:0xaefcff,transparent:true,opacity:1});
 const eyeBtn=document.getElementById('eye'), veil=document.getElementById('veil'), eyeLabel=document.getElementById('eyeLabel');
 const gpdf=(z,mu,s)=>Math.exp(-(z-mu)*(z-mu)/(2*s*s));
 const S2_ROUNDS=[
@@ -781,23 +822,25 @@ function drawScreen(dt,t){
 
 function buildStage2(){
   // the wall with two openings, at eye level in the room
-  const wallMat=new THREE.MeshBasicMaterial({color:0x1a9fbf,transparent:true,opacity:.5,depthWrite:false});
-  const edgeMat=new THREE.MeshBasicMaterial({color:0xaefcff});
   const segs=[[-7,-S2_GAPZ-S2_GAPHW],[-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW],[S2_GAPZ+S2_GAPHW,7]];
+  S2.walls=[];
   for(const [z0,z1] of segs){
-    const w=new THREE.Mesh(new THREE.BoxGeometry(.24,2.4,z1-z0),wallMat.clone());
-    w.position.set(S2_BARX,1.2,(z0+z1)/2);s2Group.add(w);
-    const e=new THREE.Mesh(new THREE.BoxGeometry(.28,.05,z1-z0),edgeMat);
-    e.position.set(S2_BARX,2.42,(z0+z1)/2);s2Group.add(e);
+    const cz=(z0+z1)/2, h=2.4;
+    const w=new THREE.Mesh(new THREE.BoxGeometry(.24,h,z1-z0),roomMat);
+    w.position.set(S2_BARX,0,cz);s2Group.add(w);
+    const e=new THREE.Mesh(new THREE.BoxGeometry(.28,.05,z1-z0),edgeMat.clone());
+    e.position.set(S2_BARX,0,cz);s2Group.add(e);
+    S2.walls.push({w,e,h,baseY:h/2,mid:Math.abs(cz)<1});
   }
-  const postMat=new THREE.MeshBasicMaterial({color:0xdfffff});
+  S2.posts=[];
   for(const z of [-S2_GAPZ-S2_GAPHW,-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW,S2_GAPZ+S2_GAPHW]){
-    const p=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,2.6,8),postMat);
-    p.position.set(S2_BARX,1.3,z);s2Group.add(p);
+    const p=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,2.6,8),roomMat);
+    p.position.set(S2_BARX,0,z);s2Group.add(p);
+    S2.posts.push({p,baseY:1.3});
   }
   for(const g of [1,-1]){
     const pad=new THREE.Mesh(new THREE.BoxGeometry(1.9,.08,S2_GAPHW*2-.1),
-      new THREE.MeshBasicMaterial({color:0x8ffcff,transparent:true,opacity:.45}));
+      new THREE.MeshBasicMaterial({color:0x8ffcff,transparent:true,opacity:0}));
     pad.position.set(S2_BARX,.04,g*S2_GAPZ);
     s2Group.add(pad);S2.gapPads.push({m:pad,g});
   }
@@ -818,11 +861,12 @@ function buildStage2(){
   // the screen at the back of the room, facing the player
   const far=new THREE.Group();far.position.set(S2_SEAM2X,0,0);s2Group.add(far);S2.far=far;
   const scr=new THREE.Mesh(new THREE.PlaneGeometry(2*S2_HALF+1,4.4),
-    new THREE.MeshBasicMaterial({map:scrTex,transparent:false}));
+    new THREE.MeshBasicMaterial({map:scrTex,transparent:true,opacity:.72,side:THREE.DoubleSide}));   // translucent, so from the field side the walls and posts read through it as it rises
   scr.rotation.y=-Math.PI/2;scr.position.set(S2_SCRX-S2_SEAM2X,2.3,0);far.add(scr);
-  const frame=new THREE.Mesh(new THREE.BoxGeometry(.12,4.7,2*S2_HALF+1.3),new THREE.MeshBasicMaterial({color:0x8ffcff}));
+  const frame=new THREE.Mesh(new THREE.BoxGeometry(.12,4.7,2*S2_HALF+1.3),roomMat);
   frame.position.set(S2_SCRX+.1-S2_SEAM2X,2.3,0);far.add(frame);
   const scrLight=new THREE.PointLight(0x6cffff,12,10);scrLight.position.set(S2_SCRX-1.5-S2_SEAM2X,2.5,0);far.add(scrLight);
+  S2.screen={mesh:scr,baseY:2.3};S2.frame={mesh:frame,baseY:2.3};S2.scrLight=scrLight;
   // the second edge: same look as the first; appears after the third pattern
   const s2seam=new THREE.Mesh(new THREE.BoxGeometry(.16,.06,14),new THREE.MeshBasicMaterial({color:0x60f7ff,transparent:true,opacity:.9}));
   s2seam.position.set(S2_SEAM2X,.05,0);s2Group.add(s2seam);S2.seam2=s2seam;
@@ -845,7 +889,51 @@ function buildStage2(){
     m.visible=false;s2Group.add(m);
     S2.dots.push({m,on:false,mode:'',t:0,gapZ:0,landZ:0,waveAt:0});
   }
+  // everything above rises out of the floor in stages (see beginRise/driveRise);
+  // start collapsed so no beat plays before the crossing point is on screen
+  riseHide();
 }
+// a mesh scaled to near-zero has degenerate triangles, and the grid shader's
+// fwidth() goes unstable on them (a software GL fallback especially) — so a
+// growing part is kept fully invisible below this floor instead of trusting
+// a tiny scale to read as "not there yet"
+const S2_MIN_SCALE=.03;
+function riseHide(){
+  for(const po of S2.posts){po.p.scale.y=S2_MIN_SCALE;po.p.position.y=0;po.p.visible=false;}
+  for(const wl of S2.walls){wl.w.scale.y=S2_MIN_SCALE;wl.w.position.y=0;wl.w.visible=false;wl.e.position.y=.02;wl.e.material.opacity=0;wl.e.visible=false;}
+  S2.screen.mesh.scale.y=S2_MIN_SCALE;S2.screen.mesh.position.y=0;S2.screen.mesh.visible=false;
+  S2.frame.mesh.scale.y=S2_MIN_SCALE;S2.frame.mesh.position.y=0;S2.frame.mesh.visible=false;
+  S2.scrLight.intensity=0;
+  S2.emitter.scale.setScalar(S2_MIN_SCALE);S2.emitter.position.y=0;S2.emitter.visible=false;
+  S2.wallGate=0;
+}
+// posts pop up fast with a spring overshoot; walls, the screen and the
+// emitter grow up from the floor with a plain ease. Every curve reaches
+// exactly 1 (or 0) at its own start/end, so the room's final pose never
+// depends on how the rise was driven.
+const S2_RISE_DUR=3.2;
+const springK=k=>{k=k<0?0:k>1?1:k;return k*(1+.35*Math.sin(k*Math.PI)*(1-k));};
+function driveRise(dt){
+  const pk=springK(dt/.55);                                  // 1. the four posts, fast, with a spring
+  for(const po of S2.posts){po.p.visible=pk>0;po.p.scale.y=Math.max(S2_MIN_SCALE,pk);po.p.position.y=po.baseY*pk;}
+  for(const wl of S2.walls){                                 // 2. the walls grow up between the posts, centre outward
+    const k=ease(THREE.MathUtils.clamp((dt-(wl.mid?.35:.7))/.75,0,1));
+    wl.w.visible=wl.e.visible=k>0;
+    wl.w.scale.y=Math.max(S2_MIN_SCALE,k);wl.w.position.y=wl.baseY*k;
+    wl.e.position.y=wl.h*k+.02;wl.e.material.opacity=k;
+  }
+  S2.wallGate=ease(THREE.MathUtils.clamp((dt-.7)/.75,0,1));   // the gap pads glow in as the outer walls pass them
+  const sc=ease(THREE.MathUtils.clamp((dt-1.35)/.9,0,1));     // 3. the screen and its frame unfold up from the floor
+  S2.screen.mesh.visible=S2.frame.mesh.visible=sc>0;
+  S2.screen.mesh.scale.y=Math.max(S2_MIN_SCALE,sc);S2.screen.mesh.position.y=S2.screen.baseY*sc;
+  S2.frame.mesh.scale.y=Math.max(S2_MIN_SCALE,sc);S2.frame.mesh.position.y=S2.frame.baseY*sc;
+  S2.scrLight.intensity=12*sc;
+  const ek=springK((dt-2.15)/.55);                            // 4. the emitter rises last (rotation runs the whole time, just unseen)
+  S2.emitter.visible=ek>0;
+  S2.emitter.scale.setScalar(Math.max(S2_MIN_SCALE,ek));
+  S2.emitter.position.y=.8*Math.min(ek,1);
+}
+function finishRise(){driveRise(S2_RISE_DUR);}   // skip straight to the room's final pose (Continue, the debug unlock)
 function s2Reset(){
   for(const b of S2.bins)b.n=0;
   splatCtx.globalCompositeOperation='source-over';splatCtx.clearRect(0,0,SCR_W,SCR_H);
@@ -874,7 +962,7 @@ export function startStage2(){
   s2SetRound(0);refreshHud();
   // it rises out of the floor where the player first stood on the paper,
   // but only once that spot is on screen: a beat nobody sees did not happen
-  s2Group.scale.y=.001; S2.riseT=undefined; S2.risePending=true;
+  S2.riseT=undefined; S2.risePending=true;
   if(crossingInView())beginRise();
   if(!inRoom())setPrompt('');
 }
@@ -882,7 +970,7 @@ const _viewScratch=new THREE.Vector3();
 function crossingInView(){
   const d=Math.hypot(playerPos.x-S2_BARX,playerPos.z);
   if(d<4)return true;
-  if(playerPos.x>S2_BARX+2&&d<12&&looking()===0&&clock.elapsedTime-lookT>3)return true;   // behind you: the camera will turn to it
+  if(playerPos.x>S2_BARX+2&&d<17&&looking()===0&&clock.elapsedTime-lookT>3)return true;   // behind you: the camera will turn to it, from far enough back that the whole room fits the frame
   const v=_viewScratch.set(S2_BARX,1,0).project(camera);
   return v.z<1&&Math.abs(v.x)<.95&&v.y>-.95&&v.y<.95&&d<34;
 }
@@ -890,6 +978,17 @@ function beginRise(){
   S2.risePending=false; S2.riseT=clock.elapsedTime;
   if(playerPos.x>S2_BARX+2&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)>=4)lookBack(3.2);
   for(let z=-6;z<=6;z+=2)setTimeout(()=>emitRipple(S2_BARX,z,1.3),Math.abs(z)*90);
+  // the world answers: the sheet stirs, and a ring of ripples runs outward
+  // from the crossing across the whole field, not only along the new wall
+  addAwake(.1);
+  const cx=2.2, cz=0, rings=[4,9,15,21];
+  rings.forEach((r,ri)=>{
+    for(let i=0;i<8;i++){
+      const a=(i/8)*Math.PI*2+ri*.4, x=cx+Math.cos(a)*r, z=cz+Math.sin(a)*r;
+      if(x<WORLD.x0||x>WORLD.x1||z<WORLD.z0||z>WORLD.z1)continue;
+      setTimeout(()=>emitRipple(x,z,.55),ri*220+i*18);
+    }
+  });
   depthChord();
 }
 function s2Hit(z){
@@ -911,8 +1010,13 @@ function s2RoundDone(){
 function updateStage2(dt,t){
   if(!S2.active)return;
   if(S2.risePending&&crossingInView())beginRise();
-  if(S2.riseT!==undefined){const k=ease((t-S2.riseT)/2.4); s2Group.scale.y=Math.max(.001,k*(1+.18*Math.sin(k*Math.PI)*(1-k))); if(k>=1){s2Group.scale.y=1;S2.riseT=undefined;}}
-  S2.emitter.rotation.y=t*1.1;S2.emitter.position.y=.8+.1*Math.sin(t*2.3);
+  roomMat.uniforms.uTime.value=t; roomMat.uniforms.uAwake.value=awakened;
+  if(S2.riseT!==undefined){
+    const rdt=t-S2.riseT;
+    if(rdt>=S2_RISE_DUR){finishRise();S2.riseT=undefined;}else driveRise(rdt);
+  }
+  S2.emitter.rotation.y=t*1.1;
+  if(S2.riseT===undefined)S2.emitter.position.y=.8+.1*Math.sin(t*2.3);
   if(!S2.arrived&&S2.riseT===undefined&&!S2.risePending&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<6){
     S2.arrived=true;S2.roundT=t;setPrompt(S2_ROUNDS[S2.round].intro);
     eyeBtn.style.display='grid';if(!S2.eyeUsed)eyeLabel.style.display='block';
@@ -967,7 +1071,7 @@ function updateStage2(dt,t){
   for(const gp of S2.gapPads){
     const inIt=blk===gp.g;
     const guide=S2.round===2&&S2.done<S2_NR?.35*(.5+.5*Math.sin(t*4.5)):.06*(.5+.5*Math.sin(t*2));
-    gp.m.material.opacity=inIt?.95:.35+guide;
+    gp.m.material.opacity=(inIt?.95:.35+guide)*S2.wallGate;
     gp.m.material.color.setHex(inIt?0xffffff:0x8ffcff);
   }
   if(blk!==S2.lastBlk){
@@ -1319,7 +1423,7 @@ export function applySave(d){
   playerPos.set(2.2,0,-.5);
   for(const r of regions){if(r.id!=='room')buildRegion(r);if(d.visited&&d.visited.includes(r.id))r.visited=true;}
   for(const r of regions)if(r.id!=='room'&&r.load&&d.regions&&d.regions[r.id]){try{r.load(d.regions[r.id]);}catch(e){console.error(e);}}
-  if(actDone()||(d.s2&&d.s2.active)){startStage2();S2.riseT=undefined;S2.risePending=false;s2Group.scale.y=1;S2.arrived=!!d.s2.arrived;S2.done=Math.min(S2_NR,d.s2.done|0);
+  if(actDone()||(d.s2&&d.s2.active)){startStage2();S2.riseT=undefined;S2.risePending=false;finishRise();S2.arrived=!!d.s2.arrived;S2.done=Math.min(S2_NR,d.s2.done|0);
     if(S2.done<S2_NR)s2SetRound(Math.min(S2_NR-1,Math.max(S2.done,d.s2.round|0)));else{S2.marker&&(S2.marker.visible=false);}}
   digestedAt=0; walked=0;
   if(d.pos&&d.pos[0]>1.4)playerPos.set(d.pos[0],0,d.pos[2]);
@@ -1401,8 +1505,9 @@ window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get s
   save:saveGame,loadSave,applySave,clearSave,
   get actDone(){return actDone()},get digested(){return digested()},get next(){const n=nextRegion();return n?n.id:null},
   get cam(){return camera.position.toArray().map(v=>+v.toFixed(2))},get arrow(){return beaconArrow.style.opacity==='1'},get counterShown(){return countEl.style.opacity!=='0'},
-  digest(){digestedAt=clock.elapsedTime;setPrompt(nextRegion()?'Follow the lights.':'');},unlockRoom(){startStage2();S2.riseT=undefined;S2.risePending=false;s2Group.scale.y=1;},
+  digest(){digestedAt=clock.elapsedTime;setPrompt(nextRegion()?'Follow the lights.':'');},unlockRoom(){startStage2();S2.riseT=undefined;S2.risePending=false;finishRise();},
   setPos(x,z){playerPos.set(x,0,z);velocity.set(0,0,0);},
   get _lm(){return landmarks},get _plane(){return sheetMesh},get flat(){return flat},
-  get residue(){return {flatPulse:+flatPulse.toFixed(2),mirror:pShadow2.visible,shadowHex:pShadow.material.color.getHex(),s2active:S2.active,risePending:!!S2.risePending,rise:S2.riseT===undefined?null:+S2.riseT.toFixed(2)}},
+  get residue(){return {flatPulse:+flatPulse.toFixed(2),mirror:pShadow2.visible,shadowHex:pShadow.material.color.getHex(),s2active:S2.active,risePending:!!S2.risePending,rise:S2.riseT===undefined?null:+S2.riseT.toFixed(2),
+    riseProgress:S2.riseT===undefined?(S2.active?1:0):+Math.min(1,(clock.elapsedTime-S2.riseT)/S2_RISE_DUR).toFixed(3)}},
   jump3d(){if(!crossed){crossed=true;dimT=clock.elapsedTime-2.5;walked=0;digestedAt=-1;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';moveStatus.style.opacity=0;}}};
