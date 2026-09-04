@@ -96,6 +96,13 @@ the avatar stays readable on the surface; a walk carves a persistent
 deformation that then heals; leaving hides it again; save/load restores it. The
 rest of the suite stays green (progression, Thin/Corner/Lamp, room, saves).
 
+Note: because BLOOM sits directly against Lamp's east edge, an early version
+revealed the arena while the player was still inside Lamp, and its first-frame
+shader compile hitch disturbed Lamp's timing-sensitive look-back test. Fixed by
+(a) never revealing/rendering BLOOM while the player is attributed to another
+region, and (b) pre-compiling BLOOM's shaders at build time so its first render
+never stalls. Lamp is untouched and green with BLOOM loaded.
+
 ## Frames (390×844)
 
 | before (plain field) | arrival | forms morphing |

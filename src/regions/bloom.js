@@ -19,8 +19,8 @@
 // sheet and agrees with it in mapPoint, exactly as docs/WORLD.md describes.
 
 import * as THREE from 'three';
-import {registerRegion, world, playerPos, velocity, clock, addAwake,
-        blip, emitRipple, actDone} from '../game.js';
+import {registerRegion, world, scene, camera, renderer, playerPos, velocity, clock,
+        addAwake, blip, emitRipple, actDone, curRegion} from '../game.js';
 
 // ---- the arena: a clear rectangle east of Lamp / north of Corner ----
 const B = {x0:26, x1:39.5, z0:9, z1:27.5};
@@ -294,15 +294,23 @@ function coherence(t){ const s=Math.sin(t*(Math.PI*2/9)); return s<=0?0:Math.pow
 registerRegion({
   id:'bloom', name:'BLOOM',
   bounds:B, entrance:ENTRANCE, color:0xc94fff,
-  build(){ buildGround(); buildBlooms(); },
+  build(){ buildGround(); buildBlooms();
+    // compile the two shaders now, while the meshes are still invisible, so the
+    // first frame BLOOM is actually shown never stalls (a mid-play compile hitch
+    // could otherwise disturb a timing-sensitive neighbour like the Lamp)
+    try{ renderer.compile(scene, camera); }catch(e){} },
   update(dt,t){
     if(!groundMat)return;
     const px=playerPos.x, pz=playerPos.z;
-    // the arena only exists to the eye when you are near it: reality destabilises
-    // as you approach rather than glowing on the horizon. During Act I the reveal
-    // radius is tight (only once you actually step in), so the sequence stays
-    // pristine; once the act is done it reads as a landmark from farther off.
-    const distC=Math.hypot(px-CX, pz-CZ), show=distC<(actDone()?30:12);
+    // the arena only exists to the eye when you are near it AND you are not
+    // busy inside another place: BLOOM sits right against Lamp's east edge, so
+    // it must never light up (or spend a frame rendering) while the player is
+    // attributed to Lamp/Corner/the room — that would bleed into their beats.
+    // Reality destabilises as you approach across the open field instead; the
+    // reveal reach is tight during Act I and widens to a landmark afterwards.
+    const inOther = curRegion && curRegion.id!=='bloom';
+    const distC=Math.hypot(px-CX, pz-CZ);
+    const show = !inOther && distC<(actDone()?30:12);
     ground.visible=blooms.visible=show;
     if(!show){ gate+=(0.0-gate)*(1-Math.pow(0.06,dt)); return; }
     const near = px>B.x0-9 && px<B.x1+9 && pz>B.z0-9 && pz<B.z1+9;
