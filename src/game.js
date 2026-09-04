@@ -161,13 +161,34 @@ const MAX_RIP=6;
 export const planeMat=new THREE.ShaderMaterial({
   transparent:true, side:THREE.DoubleSide,
   uniforms:{uTime:{value:0},uFold:{value:0},uFold2:{value:0},uAwake:{value:0},uDim:{value:0},uWorld:{value:new THREE.Vector2(WORLD.x1,WORLD.z1)},
-    uWake:{value:new THREE.Vector2(0,0)},
+    uWake:{value:new THREE.Vector2(0,0)},uCalm:{value:0},
     uRip:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector4(0,0,-99,0))},
     uRipC:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector3(.2,1,1.1))}},
   vertexShader:`
-    uniform float uTime; uniform float uFold; uniform float uFold2; uniform float uAwake; uniform float uDim; uniform vec2 uWake;
+    uniform float uTime; uniform float uFold; uniform float uFold2; uniform float uAwake; uniform float uDim; uniform vec2 uWake; uniform float uCalm;
     uniform vec4 uRip[${MAX_RIP}]; uniform vec3 uRipC[${MAX_RIP}];
-    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC;
+    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC; varying vec2 vWarp; varying float vCoh;
+    float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+    // a slow, low-frequency field that makes the lattice undulate and drift like fabric,
+    // rippling harder where the player has just walked
+    vec2 warp2(vec2 xz,float amt,float t,vec2 wake){
+      float w1=sin(xz.x*.5+xz.y*.33+t*.31);
+      float w2=cos(xz.x*.27-xz.y*.5-t*.24+1.3);
+      // value noise blended across the time-step boundary so the field never pops
+      vec2 c=floor(xz*.6);
+      float tt=t*.12, ft=floor(tt), ftf=smoothstep(0.0,1.0,fract(tt));
+      float h=mix(hash(c+ft),hash(c+ft+1.0),ftf)-.5;
+      vec2 w=vec2(w1*.6+h*.5,w2*.6-h*.5);
+      float wd=distance(xz,wake);
+      w*=1.0+exp(-wd*wd*.6)*.7;
+      return w*amt;
+    }
+    // once every ~11s (a little sooner or later depending on where you stand) the
+    // warp briefly resolves toward regular, then dissolves again
+    float coherence(vec2 xz,float t){
+      float ph=t*(6.2831853/11.0)+xz.x*.05+xz.y*.04;
+      return pow(clamp(sin(ph),0.0,1.0),4.0);
+    }
     void main(){
       vec3 p=position; vXZ=position.xz;
       float theta=uFold*1.42;
@@ -183,6 +204,16 @@ export const planeMat=new THREE.ShaderMaterial({
       vRipC=ripc;
       p.y+=rip*.22;
       vSide=step(0.0,position.x);
+      // the sheet undulates a little even on the 2D page (uAwake floor), a lot once awake;
+      // it holds still while folded or while the player is flattened (uCalm), and stays
+      // straight right at the seam so x=0 always reads
+      float coh=coherence(position.xz,uTime); vCoh=coh;
+      float calmK=1.0-uCalm*.85;
+      float edgeFade=smoothstep(0.0,3.0,abs(position.x));   // wide enough that the seam's glow band (~1 unit) never wobbles into dashes
+      float ampBase=mix(.035,.32,uAwake)*calmK*(1.0-coh*.92)*edgeFade;
+      vec2 w=warp2(position.xz,ampBase,uTime,uWake);
+      vWarp=w;
+      p.x+=w.x; p.z+=w.y;   // a warp in the plane only: any swell in height would lift the floor over the shadows, rails and markers that lie a few centimetres above it
       if(p.x>0.0){ float x=p.x; p.x=cos(theta)*x; p.y+=sin(theta)*x; }
       // the room's second edge only folds the room's own floor (masked in z and x)
       float t2=uFold2*.62*(1.0-smoothstep(6.5,8.5,abs(position.z)))*(1.0-smoothstep(11.5,12.5,position.x));
@@ -195,10 +226,12 @@ export const planeMat=new THREE.ShaderMaterial({
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);
     }`,
   fragmentShader:`
-    uniform float uTime; uniform float uFold; uniform float uAwake; uniform float uDim; uniform vec2 uWorld;
+    uniform float uTime; uniform float uFold; uniform float uAwake; uniform float uDim; uniform vec2 uWorld; uniform float uCalm;
     uniform vec4 uRip[${MAX_RIP}]; uniform vec3 uRipC[${MAX_RIP}];
-    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC;
+    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC; varying vec2 vWarp; varying float vCoh;
     float grid(float x,float s){float q=abs(fract(x/s-.5)-.5)/fwidth(x/s);return 1.-min(q,1.);}
+    // hue-only HSV->RGB (S=V=1), cheap: the fringe's rainbow
+    vec3 hue2rgb(float h){vec3 c=clamp(abs(mod(h*6.0+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0,0.0,1.0);return c;}
     void main(){
       float g=max(grid(vPos.x,1.0),grid(vPos.z,1.0));
       float fine=max(grid(vPos.x,.25),grid(vPos.z,.25))*.18;
@@ -229,6 +262,17 @@ export const planeMat=new THREE.ShaderMaterial({
       col+=wrong*smoothstep(.45,1.0,m)*.24*uAwake*(g*.9+fine+.25);
       float drift=uAwake*.45*(.5+.5*sin(uTime*.4+length(vPos.xz)*.35));
       col=mix(col,col.brg,drift);
+      // iridescent fringe on the lines only: hue drifts with the warp and time,
+      // and splits into a cool/warm two-tone edge the way the fold's edge does
+      float calmK=1.0-uCalm*.85;
+      float hueBase=fract(uTime*.035+(vWarp.x-vWarp.y)*.6+vPos.x*.015-vPos.z*.012);
+      float gsx=fract(vPos.x-.5)-.5, gsz=fract(vPos.z-.5)-.5;
+      float side=(abs(gsx)<abs(gsz))?sign(gsx):sign(gsz);
+      vec3 fringe=mix(hue2rgb(hueBase-.14)*1.25,hue2rgb(hueBase+.14)*1.25,.5+.5*side);
+      col+=fringe*mix(.05,.40,uAwake)*(1.0-vCoh*.92)*calmK*g;
+      // almost-order: the coherence wave passing through pulls the lattice back to clean cyan,
+      // visibly straightening the lines as it crosses
+      col=mix(col,mix(a,b,g*.6+fine),vCoh*.68);
       gl_FragColor=vec4(col,.94);
     }`
 });
@@ -253,14 +297,122 @@ seamWall.rotation.y=Math.PI/2; seamWall.position.y=1.3; world.add(seamWall);
 const seamGrab=new THREE.Mesh(new THREE.BoxGeometry(3.4,5,56),new THREE.MeshBasicMaterial({visible:false}));
 seamGrab.position.y=1; world.add(seamGrab);
 
+// ---------- FORM: soft, drifting edges on reeds/player/lights ----------
+// Tiny onBeforeCompile additions to the existing materials, not a swap to a
+// new material type: color, opacity, emissiveIntensity etc. still work
+// exactly as before for the code elsewhere (regions poke .material.opacity
+// directly on lights). uFGate is set per frame by the caller to fade the
+// effect in with awakening and calm it when flat/2D.
+function formEdge(material,{seed=0,speed=.05,wobble=0,harm=0}={}){
+  material.customProgramCacheKey=()=>'formEdge|'+wobble+'|'+harm;   // the hook bakes these into the GLSL; three caches programs by the hook's source text otherwise
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.uFT={value:0};shader.uniforms.uFGate={value:0};
+    shader.uniforms.uFSeed={value:seed};shader.uniforms.uFSpeed={value:speed};shader.uniforms.uFHarm={value:harm};
+    const extra=[];
+    if(wobble)extra.push(`transformed+=normal*(${wobble.toFixed(5)}*uFGate)*sin(uFT*.6+position.x*2.3+position.y*1.7+position.z*1.9+uFSeed);`);
+    if(harm)extra.push(`{float fAng=atan(position.y,position.x);transformed.xy*=1.0+.06*uFGate*sin(uFHarm*fAng+uFT*.6+uFSeed);}`);
+    shader.vertexShader=shader.vertexShader
+      .replace('#include <common>','#include <common>\nvarying vec3 vFN;varying vec3 vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;uniform float uFHarm;')
+      .replace('#include <begin_vertex>',`#include <begin_vertex>
+        ${extra.join('\n')}
+        vFN=normalize(normalMatrix*normal);vFV=normalize(-(modelViewMatrix*vec4(position,1.0)).xyz);`);
+    shader.fragmentShader=shader.fragmentShader
+      .replace('#include <common>','#include <common>\nvarying vec3 vFN;varying vec3 vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;uniform float uFSpeed;')
+      .replace('#include <dithering_fragment>',`{
+        float fFres=pow(1.0-max(dot(normalize(vFN),normalize(vFV)),0.0),1.7);
+        vec3 fRim=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*uFSpeed+uFSeed));
+        gl_FragColor.rgb=mix(gl_FragColor.rgb,fRim,fFres*uFGate*.8);
+      }
+      #include <dithering_fragment>`);
+    material.userData.uF=shader.uniforms;
+  };
+}
+// a flat annulus (RingGeometry): the radius breathes around its circumference
+// and a thin rainbow fringe sits on the inner and outer edge, not the fill
+function formRing(material,{seed=0,harm=3}={}){
+  material.customProgramCacheKey=()=>'formRing';
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.uFT={value:0};shader.uniforms.uFGate={value:0};
+    shader.uniforms.uFSeed={value:seed};shader.uniforms.uFHarm={value:harm};
+    shader.vertexShader=shader.vertexShader
+      .replace('#include <common>','#include <common>\nvarying float vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;uniform float uFHarm;')
+      .replace('#include <begin_vertex>',`#include <begin_vertex>
+        vFV=uv.y;
+        {float fAng=atan(position.y,position.x); transformed.xy*=1.0+.06*uFGate*sin(uFHarm*fAng+uFT*.6+uFSeed);}`);
+    shader.fragmentShader=shader.fragmentShader
+      .replace('#include <common>','#include <common>\nvarying float vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;')
+      .replace('#include <dithering_fragment>',`{
+        float fIn=1.0-smoothstep(0.0,.4,vFV), fOut=smoothstep(.6,1.0,vFV);
+        vec3 cIn=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*.08+uFSeed));
+        vec3 cOut=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*.08+uFSeed+.5));
+        float fFr=clamp(fIn+fOut,0.0,1.0);
+        gl_FragColor.rgb=mix(gl_FragColor.rgb,cIn*fIn+cOut*fOut,fFr*uFGate*.85);
+      }
+      #include <dithering_fragment>`);
+    material.userData.uF=shader.uniforms;
+  };
+}
+// a light's torus ring: same radius-breathing, but its UV wraps around the
+// tube (0/1 is the outer lip, .5 is the inner lip) so the two-tone fringe
+// needs a cyclic split rather than the flat ring's linear one
+function formTorusRing(material,{seed=0,harm=3}={}){
+  material.customProgramCacheKey=()=>'formTorusRing';
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.uFT={value:0};shader.uniforms.uFGate={value:0};
+    shader.uniforms.uFSeed={value:seed};shader.uniforms.uFHarm={value:harm};
+    shader.vertexShader=shader.vertexShader
+      .replace('#include <common>','#include <common>\nvarying float vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;uniform float uFHarm;')
+      .replace('#include <begin_vertex>',`#include <begin_vertex>
+        vFV=uv.y;
+        {float fAng=atan(position.y,position.x); transformed.xy*=1.0+.06*uFGate*sin(uFHarm*fAng+uFT*.6+uFSeed);}`);
+    shader.fragmentShader=shader.fragmentShader
+      .replace('#include <common>','#include <common>\nvarying float vFV;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;')
+      .replace('#include <dithering_fragment>',`{
+        float fOut=.5+.5*cos(6.2831*vFV), fIn=1.0-fOut;
+        vec3 cOut=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*.08+uFSeed));
+        vec3 cIn=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+uFT*.08+uFSeed+.5));
+        gl_FragColor.rgb=mix(gl_FragColor.rgb,cOut*fOut+cIn*fIn,uFGate*.6);
+      }
+      #include <dithering_fragment>`);
+    material.userData.uF=shader.uniforms;
+  };
+}
+// the 2D disc: a soft chromatic edge instead of a hard cut
+function formDisc(material,{seed=0,radius=.42}={}){
+  material.customProgramCacheKey=()=>'formDisc|'+radius;
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.uFT={value:0};shader.uniforms.uFGate={value:0};shader.uniforms.uFSeed={value:seed};
+    shader.vertexShader=shader.vertexShader
+      .replace('#include <common>','#include <common>\nvarying vec2 vFXY;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;')
+      .replace('#include <begin_vertex>','#include <begin_vertex>\nvFXY=position.xy;');
+    shader.fragmentShader=shader.fragmentShader
+      .replace('#include <common>','#include <common>\nvarying vec2 vFXY;\nuniform float uFT;uniform float uFGate;uniform float uFSeed;')
+      .replace('#include <dithering_fragment>',`{
+        float r=length(vFXY)/${radius.toFixed(4)};
+        float edge=smoothstep(.7,.86,r)*(1.0-smoothstep(.9,1.05,r));
+        float hue=uFT*.15+atan(vFXY.y,vFXY.x)*.3+uFSeed;
+        vec3 rc=.5+.5*cos(6.2831*(vec3(0.,.33,.67)+hue));
+        gl_FragColor.rgb=mix(gl_FragColor.rgb,rc,edge*uFGate*.85);
+        gl_FragColor.a*=1.0-smoothstep(.92,1.05,r)*.55;
+      }
+      #include <dithering_fragment>`);
+    material.userData.uF=shader.uniforms;
+  };
+}
+
 // ---------- player: a flat disc in 2D, a sphere in 3D ----------
-const pDisc=new THREE.Mesh(new THREE.CircleGeometry(.42,40),new THREE.MeshBasicMaterial({color:0xeaffff}));
+const pDisc=new THREE.Mesh(new THREE.CircleGeometry(.42,40),new THREE.MeshBasicMaterial({color:0xeaffff,transparent:true}));
+formDisc(pDisc.material,{seed:Math.random()*6.28,radius:.42});
 pDisc.rotation.x=-Math.PI/2;pDisc.position.y=.08;
 const pRing=new THREE.Mesh(new THREE.RingGeometry(.55,.66,48),
   new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.55,side:THREE.DoubleSide}));
+formRing(pRing.material,{seed:Math.random()*6.28,harm:3});
 pRing.rotation.x=-Math.PI/2;pRing.position.y=.07;
 const pCore=new THREE.Mesh(new THREE.IcosahedronGeometry(.36,2),
   new THREE.MeshStandardMaterial({color:0xdfffff,emissive:0x49e9ff,emissiveIntensity:3,roughness:.18,metalness:.15}));
+// a thin iridescent rim + a very subtle wobble (<=3% of the .36 radius); the
+// white core underneath is untouched so the player stays the brightest thing
+formEdge(pCore.material,{seed:Math.random()*6.28,speed:.04,wobble:.36*.025});
 const pHalo=new THREE.Mesh(new THREE.SphereGeometry(.6,24,24),
   new THREE.MeshBasicMaterial({color:0x52f5ff,transparent:true,opacity:.075,blending:THREE.AdditiveBlending,depthWrite:false}));
 const pShadow2=new THREE.Mesh(new THREE.CircleGeometry(.5,32),new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:.22}));
@@ -290,6 +442,7 @@ export function makeLight(pos,color=0x62ffff){
  core.scale.setScalar(1.65);
  const ring=new THREE.Mesh(new THREE.TorusGeometry(.58,.035,8,64),
    new THREE.MeshBasicMaterial({color,transparent:true,opacity:.65}));
+ formTorusRing(ring.material,{seed:Math.random()*6.28,harm:3});
  ring.rotation.x=Math.PI/2; ring.scale.setScalar(1.35); g.add(core,ring);
  const beam=new THREE.Mesh(new THREE.CylinderGeometry(.12,.38,12,24,1,true),
    new THREE.MeshBasicMaterial({color,transparent:true,opacity:.18,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
@@ -309,6 +462,7 @@ function animateLight(g,t,active,dimv=dim){
  u.core.scale.y=1.65*THREE.MathUtils.lerp(.35,1,dimv);
  u.beam.visible=active&&dimv>.2; u.glow.visible=active;
  if(active)u.beam.material.opacity=.13+.10*(.5+.5*Math.sin(t*3.2+u.t0));
+ const rf=u.ring.material.userData.uF; if(rf){rf.uFT.value=t;rf.uFGate.value=.3+.7*awakened;}
 }
 function currentTarget(){for(let i=0;i<seedData.length;i++)if(!seedData[i].taken)return i;return -1;}
 const guideLine=new THREE.Line(
@@ -338,12 +492,16 @@ export function makeLandmark(x,z,h,grow=false){
  if(!LM_GEO[key]){const g=new THREE.CylinderGeometry(.09,.1+h*.07,h,6); g.translate(0,h/2,0); LM_GEO[key]=g; LM_BAND[key]=new THREE.TorusGeometry(.16+h*.07,.035,6,14);}
  const m=new THREE.Mesh(LM_GEO[key],new THREE.MeshStandardMaterial({color:col.clone().multiplyScalar(.28),
    emissive:col.clone().multiplyScalar(.55),emissiveIntensity:1,roughness:.72,metalness:.3}));
+ // the body colour stays the note; a fresnel rim carries its own slow hue drift on top
+ formEdge(m.material,{seed:Math.random()*6.28,speed:.02+Math.random()*.03});
  const band=new THREE.Mesh(LM_BAND[key],
    new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0,depthWrite:false}));
  band.rotation.x=Math.PI/2; band.visible=false;
  const pivot=new THREE.Group(); pivot.add(m,band); world.add(pivot);
  const l={pivot,m,band,x,z,h,note,col,freq:lmFreq(h),bx:0,bz:0,bvx:0,bvz:0,ring:0,white:0,bandT:-99,
-   inside:false,pair:null,thread:null,grow:grow?0:1,lean:0};
+   inside:false,pair:null,thread:null,grow:grow?0:1,lean:0,
+   // its own slow phase: height/girth breathe out of phase, the tip drifts independent of the brush spring
+   breathP:Math.random()*6.28,breathAmp:.06+Math.random()*.04,driftP:Math.random()*6.28,driftAmp:.07+Math.random()*.06};
  landmarks.push(l); return l;
 }
 { // the first three reeds on each side of the edge always hold an octave and a fifth
@@ -420,6 +578,8 @@ const lmUp=new THREE.Vector3();
 function updateLandmarks(dt,t){
  const th=fold*1.42; lmUp.set(-Math.sin(th),Math.cos(th),0);
  const sy=THREE.MathUtils.lerp(.04,1,shape());
+ const calm=shape();                                  // 0 on the page and while flat, 1 in full 3D
+ const reedGate=(.12+.88*calm)*(.4+.6*awakened);       // rim: faint on the page, full once awake
  for(const l of landmarks){
    l.lean=Math.max(0,l.lean-dt*1.6);
    // the field answers a near player: reeds lean off your path and ease back
@@ -442,10 +602,15 @@ function updateLandmarks(dt,t){
    if(l.x<=0)l.pivot.position.set(l.x,0,l.z); else l.pivot.position.copy(foldedPoint(_lp.set(l.x,0,l.z)));
    l.pivot.rotation.z=l.x<=0?0:th;
    const sink=l.sunk?1-ease((t-l.sinkT)/1.6):0; l.pivot.visible=sink<1;
-   l.m.scale.y=Math.max(.001,sy*ge*(1-sink)); l.m.scale.x=l.m.scale.z=1+l.ring*.12*(1-dim)+(1-ge)*.4;
-   l.m.rotation.x=l.bz*.55*dim; l.m.rotation.z=-l.bx*.55*dim;
+   // height and girth breathe out of phase, scaled down to nothing on the page/flat
+   const bh=1+l.breathAmp*calm*Math.sin(t*.55+l.breathP), bg=1+l.breathAmp*calm*Math.sin(t*.55+l.breathP+2.4);
+   l.m.scale.y=Math.max(.001,sy*ge*(1-sink)*bh); l.m.scale.x=l.m.scale.z=(1+l.ring*.12*(1-dim)+(1-ge)*.4)*bg;
+   // a slow lean, independent of the brush spring, added to it — the tip drifts a little
+   const dft=l.driftAmp*calm, ldx=Math.sin(t*.17+l.driftP)*dft, ldz=Math.cos(t*.13+l.driftP*1.7)*dft;
+   l.m.rotation.x=(l.bz+ldz)*.55*dim; l.m.rotation.z=-(l.bx+ldx)*.55*dim;
    const lit=l.ring>0||l.white>0||l.lean>.03;
    if(lit||l.lit){l.m.material.emissiveIntensity=1+l.ring*2.6+l.white*3+l.lean*.5;l.m.material.emissive.copy(l.col).multiplyScalar(.55).lerp(WHITE,l.white);l.lit=lit;}
+   const rf=l.m.material.userData.uF; if(rf){rf.uFT.value=t;rf.uFGate.value=reedGate;}
    const bf=(t-l.bandT)*2.6/Math.max(.4,l.h);
    if(bf>=0&&bf<1&&dim>.3){l.band.visible=true;l.band.position.y=bf*l.h*sy;l.band.material.opacity=(1-bf)*.9*dim;}
    else l.band.visible=false;
@@ -516,6 +681,47 @@ registerRegion({id:'room',name:'THE ROOM',bounds:{x0:1.4,x1:11.8,z0:-8,z1:8},key
   onLeave(){eyeBtn.style.display='none';eyeLabel.style.display='none';if(S2.active){S2.marker.visible=false;setPrompt('');}},
   done:()=>S2.done>=S2_NR});
 const s2Group=new THREE.Group(); s2Group.visible=false; world.add(s2Group);
+// the room's structure: dark translucent faces carrying the floor's own grid
+// language, cyan lines with a faint rainbow fringe, a fresnel edge glow that
+// brightens the silhouette, gentle time drift. One shared material — the
+// walls, the posts and the screen's back frame all wear it.
+const roomMat=new THREE.ShaderMaterial({
+  transparent:true,side:THREE.DoubleSide,depthWrite:false,
+  uniforms:{uTime:{value:0},uAwake:{value:0}},
+  vertexShader:`
+    varying vec3 vWP; varying vec3 vN; varying vec3 vV;
+    void main(){
+      // world position for the grid (translation only, fine under any scale);
+      // the normal and view vector are done in view space with the built-in
+      // normalMatrix, which is the correct inverse-transpose for whatever
+      // scale is on the mesh — the rise animates scale.y hard, and a raw
+      // mat3(modelMatrix) normal breaks (badly) under that non-uniform scale
+      vec4 wp=modelMatrix*vec4(position,1.0);
+      vWP=wp.xyz;
+      vec4 mvPosition=modelViewMatrix*vec4(position,1.0);
+      vN=normalize(normalMatrix*normal); vV=-mvPosition.xyz;
+      gl_Position=projectionMatrix*mvPosition;
+    }`,
+  fragmentShader:`
+    uniform float uTime; uniform float uAwake;
+    varying vec3 vWP; varying vec3 vN; varying vec3 vV;
+    // a fixed-width line, no fwidth()/derivatives: those go unstable on thin,
+    // near-edge-on or momentarily-degenerate geometry under a software GL
+    // fallback, which is exactly what a rising, non-uniformly-scaled wall is
+    float grid(float x,float s){float d=abs(fract(x/s)-.5)-.5;return 1.-smoothstep(0.0,.06,abs(d));}
+    void main(){
+      float g=max(max(grid(vWP.x,1.0),grid(vWP.z,1.0)),grid(vWP.y,1.0));
+      vec3 col=mix(vec3(.02,.07,.09),vec3(.22,.85,1.0),g*.55);
+      float ph=uTime*.35+vWP.y*1.3;
+      col+=vec3(.10*sin(ph),.07*sin(ph+2.1),.13*sin(ph+4.2))*g;
+      vec3 n=normalize(vN), v=normalize(vV);
+      float fres=pow(1.0-clamp(abs(dot(n,v)),0.0,1.0),2.2);
+      col+=vec3(.15,.95,1.15)*fres*(.55+.25*sin(uTime*.6));
+      col+=vec3(.05,.22,.24)*uAwake*.5;
+      gl_FragColor=vec4(col,clamp(.38+g*.2+fres*.4,0.0,.92));
+    }`
+});
+const edgeMat=new THREE.MeshBasicMaterial({color:0xaefcff,transparent:true,opacity:1});
 const eyeBtn=document.getElementById('eye'), veil=document.getElementById('veil'), eyeLabel=document.getElementById('eyeLabel');
 const gpdf=(z,mu,s)=>Math.exp(-(z-mu)*(z-mu)/(2*s*s));
 const S2_ROUNDS=[
@@ -616,23 +822,25 @@ function drawScreen(dt,t){
 
 function buildStage2(){
   // the wall with two openings, at eye level in the room
-  const wallMat=new THREE.MeshBasicMaterial({color:0x1a9fbf,transparent:true,opacity:.5,depthWrite:false});
-  const edgeMat=new THREE.MeshBasicMaterial({color:0xaefcff});
   const segs=[[-7,-S2_GAPZ-S2_GAPHW],[-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW],[S2_GAPZ+S2_GAPHW,7]];
+  S2.walls=[];
   for(const [z0,z1] of segs){
-    const w=new THREE.Mesh(new THREE.BoxGeometry(.24,2.4,z1-z0),wallMat.clone());
-    w.position.set(S2_BARX,1.2,(z0+z1)/2);s2Group.add(w);
-    const e=new THREE.Mesh(new THREE.BoxGeometry(.28,.05,z1-z0),edgeMat);
-    e.position.set(S2_BARX,2.42,(z0+z1)/2);s2Group.add(e);
+    const cz=(z0+z1)/2, h=2.4;
+    const w=new THREE.Mesh(new THREE.BoxGeometry(.24,h,z1-z0),roomMat);
+    w.position.set(S2_BARX,0,cz);s2Group.add(w);
+    const e=new THREE.Mesh(new THREE.BoxGeometry(.28,.05,z1-z0),edgeMat.clone());
+    e.position.set(S2_BARX,0,cz);s2Group.add(e);
+    S2.walls.push({w,e,h,baseY:h/2,mid:Math.abs(cz)<1});
   }
-  const postMat=new THREE.MeshBasicMaterial({color:0xdfffff});
+  S2.posts=[];
   for(const z of [-S2_GAPZ-S2_GAPHW,-S2_GAPZ+S2_GAPHW,S2_GAPZ-S2_GAPHW,S2_GAPZ+S2_GAPHW]){
-    const p=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,2.6,8),postMat);
-    p.position.set(S2_BARX,1.3,z);s2Group.add(p);
+    const p=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,2.6,8),roomMat);
+    p.position.set(S2_BARX,0,z);s2Group.add(p);
+    S2.posts.push({p,baseY:1.3});
   }
   for(const g of [1,-1]){
     const pad=new THREE.Mesh(new THREE.BoxGeometry(1.9,.08,S2_GAPHW*2-.1),
-      new THREE.MeshBasicMaterial({color:0x8ffcff,transparent:true,opacity:.45}));
+      new THREE.MeshBasicMaterial({color:0x8ffcff,transparent:true,opacity:0}));
     pad.position.set(S2_BARX,.04,g*S2_GAPZ);
     s2Group.add(pad);S2.gapPads.push({m:pad,g});
   }
@@ -653,11 +861,12 @@ function buildStage2(){
   // the screen at the back of the room, facing the player
   const far=new THREE.Group();far.position.set(S2_SEAM2X,0,0);s2Group.add(far);S2.far=far;
   const scr=new THREE.Mesh(new THREE.PlaneGeometry(2*S2_HALF+1,4.4),
-    new THREE.MeshBasicMaterial({map:scrTex,transparent:false}));
+    new THREE.MeshBasicMaterial({map:scrTex,transparent:true,opacity:.72,side:THREE.DoubleSide}));   // translucent, so from the field side the walls and posts read through it as it rises
   scr.rotation.y=-Math.PI/2;scr.position.set(S2_SCRX-S2_SEAM2X,2.3,0);far.add(scr);
-  const frame=new THREE.Mesh(new THREE.BoxGeometry(.12,4.7,2*S2_HALF+1.3),new THREE.MeshBasicMaterial({color:0x8ffcff}));
+  const frame=new THREE.Mesh(new THREE.BoxGeometry(.12,4.7,2*S2_HALF+1.3),roomMat);
   frame.position.set(S2_SCRX+.1-S2_SEAM2X,2.3,0);far.add(frame);
   const scrLight=new THREE.PointLight(0x6cffff,12,10);scrLight.position.set(S2_SCRX-1.5-S2_SEAM2X,2.5,0);far.add(scrLight);
+  S2.screen={mesh:scr,baseY:2.3};S2.frame={mesh:frame,baseY:2.3};S2.scrLight=scrLight;
   // the second edge: same look as the first; appears after the third pattern
   const s2seam=new THREE.Mesh(new THREE.BoxGeometry(.16,.06,14),new THREE.MeshBasicMaterial({color:0x60f7ff,transparent:true,opacity:.9}));
   s2seam.position.set(S2_SEAM2X,.05,0);s2Group.add(s2seam);S2.seam2=s2seam;
@@ -680,7 +889,51 @@ function buildStage2(){
     m.visible=false;s2Group.add(m);
     S2.dots.push({m,on:false,mode:'',t:0,gapZ:0,landZ:0,waveAt:0});
   }
+  // everything above rises out of the floor in stages (see beginRise/driveRise);
+  // start collapsed so no beat plays before the crossing point is on screen
+  riseHide();
 }
+// a mesh scaled to near-zero has degenerate triangles, and the grid shader's
+// fwidth() goes unstable on them (a software GL fallback especially) — so a
+// growing part is kept fully invisible below this floor instead of trusting
+// a tiny scale to read as "not there yet"
+const S2_MIN_SCALE=.03;
+function riseHide(){
+  for(const po of S2.posts){po.p.scale.y=S2_MIN_SCALE;po.p.position.y=0;po.p.visible=false;}
+  for(const wl of S2.walls){wl.w.scale.y=S2_MIN_SCALE;wl.w.position.y=0;wl.w.visible=false;wl.e.position.y=.02;wl.e.material.opacity=0;wl.e.visible=false;}
+  S2.screen.mesh.scale.y=S2_MIN_SCALE;S2.screen.mesh.position.y=0;S2.screen.mesh.visible=false;
+  S2.frame.mesh.scale.y=S2_MIN_SCALE;S2.frame.mesh.position.y=0;S2.frame.mesh.visible=false;
+  S2.scrLight.intensity=0;
+  S2.emitter.scale.setScalar(S2_MIN_SCALE);S2.emitter.position.y=0;S2.emitter.visible=false;
+  S2.wallGate=0;
+}
+// posts pop up fast with a spring overshoot; walls, the screen and the
+// emitter grow up from the floor with a plain ease. Every curve reaches
+// exactly 1 (or 0) at its own start/end, so the room's final pose never
+// depends on how the rise was driven.
+const S2_RISE_DUR=3.2;
+const springK=k=>{k=k<0?0:k>1?1:k;return k*(1+.35*Math.sin(k*Math.PI)*(1-k));};
+function driveRise(dt){
+  const pk=springK(dt/.55);                                  // 1. the four posts, fast, with a spring
+  for(const po of S2.posts){po.p.visible=pk>0;po.p.scale.y=Math.max(S2_MIN_SCALE,pk);po.p.position.y=po.baseY*pk;}
+  for(const wl of S2.walls){                                 // 2. the walls grow up between the posts, centre outward
+    const k=ease(THREE.MathUtils.clamp((dt-(wl.mid?.35:.7))/.75,0,1));
+    wl.w.visible=wl.e.visible=k>0;
+    wl.w.scale.y=Math.max(S2_MIN_SCALE,k);wl.w.position.y=wl.baseY*k;
+    wl.e.position.y=wl.h*k+.02;wl.e.material.opacity=k;
+  }
+  S2.wallGate=ease(THREE.MathUtils.clamp((dt-.7)/.75,0,1));   // the gap pads glow in as the outer walls pass them
+  const sc=ease(THREE.MathUtils.clamp((dt-1.35)/.9,0,1));     // 3. the screen and its frame unfold up from the floor
+  S2.screen.mesh.visible=S2.frame.mesh.visible=sc>0;
+  S2.screen.mesh.scale.y=Math.max(S2_MIN_SCALE,sc);S2.screen.mesh.position.y=S2.screen.baseY*sc;
+  S2.frame.mesh.scale.y=Math.max(S2_MIN_SCALE,sc);S2.frame.mesh.position.y=S2.frame.baseY*sc;
+  S2.scrLight.intensity=12*sc;
+  const ek=springK((dt-2.15)/.55);                            // 4. the emitter rises last (rotation runs the whole time, just unseen)
+  S2.emitter.visible=ek>0;
+  S2.emitter.scale.setScalar(Math.max(S2_MIN_SCALE,ek));
+  S2.emitter.position.y=.8*Math.min(ek,1);
+}
+function finishRise(){driveRise(S2_RISE_DUR);}   // skip straight to the room's final pose (Continue, the debug unlock)
 function s2Reset(){
   for(const b of S2.bins)b.n=0;
   splatCtx.globalCompositeOperation='source-over';splatCtx.clearRect(0,0,SCR_W,SCR_H);
@@ -709,7 +962,7 @@ export function startStage2(){
   s2SetRound(0);refreshHud();
   // it rises out of the floor where the player first stood on the paper,
   // but only once that spot is on screen: a beat nobody sees did not happen
-  s2Group.scale.y=.001; S2.riseT=undefined; S2.risePending=true;
+  S2.riseT=undefined; S2.risePending=true;
   if(crossingInView())beginRise();
   if(!inRoom())setPrompt('');
 }
@@ -717,7 +970,7 @@ const _viewScratch=new THREE.Vector3();
 function crossingInView(){
   const d=Math.hypot(playerPos.x-S2_BARX,playerPos.z);
   if(d<4)return true;
-  if(playerPos.x>S2_BARX+2&&d<12&&looking()===0&&clock.elapsedTime-lookT>3)return true;   // behind you: the camera will turn to it
+  if(playerPos.x>S2_BARX+2&&d<17&&looking()===0&&clock.elapsedTime-lookT>3)return true;   // behind you: the camera will turn to it, from far enough back that the whole room fits the frame
   const v=_viewScratch.set(S2_BARX,1,0).project(camera);
   return v.z<1&&Math.abs(v.x)<.95&&v.y>-.95&&v.y<.95&&d<34;
 }
@@ -725,6 +978,17 @@ function beginRise(){
   S2.risePending=false; S2.riseT=clock.elapsedTime;
   if(playerPos.x>S2_BARX+2&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)>=4)lookBack(3.2);
   for(let z=-6;z<=6;z+=2)setTimeout(()=>emitRipple(S2_BARX,z,1.3),Math.abs(z)*90);
+  // the world answers: the sheet stirs, and a ring of ripples runs outward
+  // from the crossing across the whole field, not only along the new wall
+  addAwake(.1);
+  const cx=2.2, cz=0, rings=[4,9,15,21];
+  rings.forEach((r,ri)=>{
+    for(let i=0;i<8;i++){
+      const a=(i/8)*Math.PI*2+ri*.4, x=cx+Math.cos(a)*r, z=cz+Math.sin(a)*r;
+      if(x<WORLD.x0||x>WORLD.x1||z<WORLD.z0||z>WORLD.z1)continue;
+      setTimeout(()=>emitRipple(x,z,.55),ri*220+i*18);
+    }
+  });
   depthChord();
 }
 function s2Hit(z){
@@ -746,8 +1010,13 @@ function s2RoundDone(){
 function updateStage2(dt,t){
   if(!S2.active)return;
   if(S2.risePending&&crossingInView())beginRise();
-  if(S2.riseT!==undefined){const k=ease((t-S2.riseT)/2.4); s2Group.scale.y=Math.max(.001,k*(1+.18*Math.sin(k*Math.PI)*(1-k))); if(k>=1){s2Group.scale.y=1;S2.riseT=undefined;}}
-  S2.emitter.rotation.y=t*1.1;S2.emitter.position.y=.8+.1*Math.sin(t*2.3);
+  roomMat.uniforms.uTime.value=t; roomMat.uniforms.uAwake.value=awakened;
+  if(S2.riseT!==undefined){
+    const rdt=t-S2.riseT;
+    if(rdt>=S2_RISE_DUR){finishRise();S2.riseT=undefined;}else driveRise(rdt);
+  }
+  S2.emitter.rotation.y=t*1.1;
+  if(S2.riseT===undefined)S2.emitter.position.y=.8+.1*Math.sin(t*2.3);
   if(!S2.arrived&&S2.riseT===undefined&&!S2.risePending&&Math.hypot(playerPos.x-S2_BARX,playerPos.z)<6){
     S2.arrived=true;S2.roundT=t;setPrompt(S2_ROUNDS[S2.round].intro);
     eyeBtn.style.display='grid';if(!S2.eyeUsed)eyeLabel.style.display='block';
@@ -802,7 +1071,7 @@ function updateStage2(dt,t){
   for(const gp of S2.gapPads){
     const inIt=blk===gp.g;
     const guide=S2.round===2&&S2.done<S2_NR?.35*(.5+.5*Math.sin(t*4.5)):.06*(.5+.5*Math.sin(t*2));
-    gp.m.material.opacity=inIt?.95:.35+guide;
+    gp.m.material.opacity=(inIt?.95:.35+guide)*S2.wallGate;
     gp.m.material.color.setHex(inIt?0xffffff:0x8ffcff);
   }
   if(blk!==S2.lastBlk){
@@ -937,6 +1206,12 @@ function updatePlayer(dt,t){
  player.scale.setScalar(THREE.MathUtils.lerp(portraitMode()?1.5:1,1,sh));
  p3.rotation.y+=dt*(.7+awakened*1.8);
  pHalo.scale.setScalar(1+.08*Math.sin(performance.now()*.004));
+ // the player's chromatic fringes: faint on the page, fuller as awakening grows
+ const gateDisc=.3+.7*awakened, gateCore=.4+.6*awakened;
+ const uD=pDisc.material.userData.uF, uR=pRing.material.userData.uF, uC=pCore.material.userData.uF;
+ if(uD){uD.uFT.value=t;uD.uFGate.value=gateDisc;}
+ if(uR){uR.uFT.value=t;uR.uFGate.value=gateDisc;}
+ if(uC){uC.uFT.value=t;uC.uFGate.value=gateCore;}
 }
 
 function updateSeeds(t){
@@ -1065,6 +1340,8 @@ function animate(){
  fold+=(foldTarget-fold)*(1-Math.pow(.0001,dt));
  roomFold+=(roomFoldTarget-roomFold)*(1-Math.pow(.0005,dt));
  planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;planeMat.uniforms.uFold2.value=roomFold;planeMat.uniforms.uDim.value=dim;
+ // the sheet holds still while it is lifted (folding) or while the player is flattened
+ planeMat.uniforms.uCalm.value=Math.max(fold,Math.min(1,flat));
  // the ground's dimple trails just behind your own heading, not under your feet
  {const vl=velocity.length(), k=vl>1e-3?.8/vl:0; planeMat.uniforms.uWake.value.set(playerPos.x-velocity.x*k,playerPos.z-velocity.z*k);}
  if(S2.far)S2.far.rotation.z=roomFold*.62;
@@ -1146,7 +1423,7 @@ export function applySave(d){
   playerPos.set(2.2,0,-.5);
   for(const r of regions){if(r.id!=='room')buildRegion(r);if(d.visited&&d.visited.includes(r.id))r.visited=true;}
   for(const r of regions)if(r.id!=='room'&&r.load&&d.regions&&d.regions[r.id]){try{r.load(d.regions[r.id]);}catch(e){console.error(e);}}
-  if(actDone()||(d.s2&&d.s2.active)){startStage2();S2.riseT=undefined;S2.risePending=false;s2Group.scale.y=1;S2.arrived=!!d.s2.arrived;S2.done=Math.min(S2_NR,d.s2.done|0);
+  if(actDone()||(d.s2&&d.s2.active)){startStage2();S2.riseT=undefined;S2.risePending=false;finishRise();S2.arrived=!!d.s2.arrived;S2.done=Math.min(S2_NR,d.s2.done|0);
     if(S2.done<S2_NR)s2SetRound(Math.min(S2_NR-1,Math.max(S2.done,d.s2.round|0)));else{S2.marker&&(S2.marker.visible=false);}}
   digestedAt=0; walked=0;
   if(d.pos&&d.pos[0]>1.4)playerPos.set(d.pos[0],0,d.pos[2]);
@@ -1228,8 +1505,9 @@ window.__DA={get pos(){return playerPos.toArray()},get fold(){return fold},get s
   save:saveGame,loadSave,applySave,clearSave,
   get actDone(){return actDone()},get digested(){return digested()},get next(){const n=nextRegion();return n?n.id:null},
   get cam(){return camera.position.toArray().map(v=>+v.toFixed(2))},get arrow(){return beaconArrow.style.opacity==='1'},get counterShown(){return countEl.style.opacity!=='0'},
-  digest(){digestedAt=clock.elapsedTime;setPrompt(nextRegion()?'Follow the lights.':'');},unlockRoom(){startStage2();S2.riseT=undefined;S2.risePending=false;s2Group.scale.y=1;},
+  digest(){digestedAt=clock.elapsedTime;setPrompt(nextRegion()?'Follow the lights.':'');},unlockRoom(){startStage2();S2.riseT=undefined;S2.risePending=false;finishRise();},
   setPos(x,z){playerPos.set(x,0,z);velocity.set(0,0,0);},
   get _lm(){return landmarks},get _plane(){return sheetMesh},get flat(){return flat},
-  get residue(){return {flatPulse:+flatPulse.toFixed(2),mirror:pShadow2.visible,shadowHex:pShadow.material.color.getHex(),s2active:S2.active,risePending:!!S2.risePending,rise:S2.riseT===undefined?null:+S2.riseT.toFixed(2)}},
+  get residue(){return {flatPulse:+flatPulse.toFixed(2),mirror:pShadow2.visible,shadowHex:pShadow.material.color.getHex(),s2active:S2.active,risePending:!!S2.risePending,rise:S2.riseT===undefined?null:+S2.riseT.toFixed(2),
+    riseProgress:S2.riseT===undefined?(S2.active?1:0):+Math.min(1,(clock.elapsedTime-S2.riseT)/S2_RISE_DUR).toFixed(3)}},
   jump3d(){if(!crossed){crossed=true;dimT=clock.elapsedTime-2.5;walked=0;digestedAt=-1;foldTarget=0;playerPos.set(2.2,0,-.5);dimLabel.textContent='3D';moveStatus.style.opacity=0;}}};
