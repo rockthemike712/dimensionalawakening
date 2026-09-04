@@ -487,6 +487,100 @@ const doneNow = await thinDone();
 console.log('after the full run:', JSON.stringify(st), 'done=', doneNow);
 if (!doneNow) errors.push('region not marked done after the full run reached the goal');
 
+// ---- the goal payoff, first pass: confirm the mechanism settles. The
+// narrative run above reaches the goal through several generous, Node-side
+// polling loops (each an `await page.evaluate(...)` round trip) — on this
+// host, under whatever concurrent load other agents are putting on the
+// shared CPU, a single such round trip has been observed to itself take
+// multiple real seconds, which is longer than the entire ~2.75s look-back
+// + sink cycle. By the time this loop's own polling notices `goalReached`,
+// the look-back can already be over. That's a property of this specific
+// detection method, not of the feature, so the strict "still sinking,
+// wall B on screen" proof is redone below with a tighter, in-page detector
+// — this first check only confirms the sink eventually settles. ----
+{
+  const t0 = Date.now(); let wr = (await thinState()).wallsRetired;
+  while (Date.now() - t0 < 6000 && wr < .9) { await page.waitForTimeout(50); wr = (await thinState()).wallsRetired; }
+  console.log('wallsRetired after the goal (Node-side poll): ' + wr);
+  await page.screenshot({ path: shotDir + 'thin-goal-payoff-settled.png' });
+  if (wr < .9) errors.push('wallsRetired did not reach ~1 within a bounded poll after the goal (wallsRetired=' + wr + ')');
+}
+
+// ---- the goal payoff, second pass: the actual look-back proof. Jumps
+// straight to "one step short of the goal" via applySave (slots and the
+// gap already earned, exactly like tests/act1.mjs's saveWith) so the whole
+// slow corridor gauntlet above isn't repeated, then takes that last step
+// and detects `goalReached` with `page.waitForFunction` — evaluated
+// in-page on every animation frame by Playwright itself, not via a Node
+// round trip per check — to react as close to the true moment as this
+// host allows. Confirms: the walls are still visibly sinking sometime
+// after the goal (wallsRaw>0, wallsRaw<1.3 i.e. not decayed away), wall B
+// (normally behind the camera at the goal) is actually inside the 390x844
+// frame while that's true, and it eventually settles. ----
+{
+  await page.evaluate(d => window.__DA.applySave(d), {
+    crossed: true, seeds: 3, awakened: .7, roomFold: 0, pos: [26.6, 0, -16], place: 'THIN',
+    s2: { done: 0, round: 0, arrived: false, active: false }, visited: ['thin'], t: Date.now(),
+    regions: { thin: { slotsPassed: 2, goalReached: false, gapCrossed: true, wallsPassed: [true, true] } },
+  });
+  await page.waitForTimeout(200);
+
+  await page.keyboard.down('ArrowUp');
+  let reachedGoal = true;
+  try {
+    await page.waitForFunction(() => window.__DA.regions.find(r => r.id === 'thin').state.goalReached, { timeout: 8000, polling: 'raf' });
+  } catch { reachedGoal = false; }
+  if (!reachedGoal) errors.push('the dedicated look-back repro never reached the goal within a bounded poll');
+
+  // wait past the point wallsRaw first ticks up to where the look-back's
+  // camera turn has actually finished ramping in (~0.45s of its own turn,
+  // see `sinceLook` in debug()) — catching the very first instant the
+  // spring moves is too early: the camera itself hasn't rotated yet then.
+  let sawMidSink = true, mid = null;
+  try {
+    await page.waitForFunction(() => { const s = window.__DA.regions.find(r => r.id === 'thin').state; return s.sinceLook >= .5; }, { timeout: 5000, polling: 'raf' });
+    mid = await thinState();
+  } catch { sawMidSink = false; }
+  await page.keyboard.up('ArrowUp');
+
+  const wallB = await page.evaluate(() => window.__DA.project(20.3, 1.2, -16));
+  const onScreen = (p) => p.x >= 0 && p.x <= 390 && p.y >= 0 && p.y <= 844;
+  console.log('look-back repro: sawMidSink=' + sawMidSink + ' mid=' + JSON.stringify(mid) + ' wallB=' + JSON.stringify(wallB));
+  await page.screenshot({ path: shotDir + 'thin-goal-payoff-lookback.png' });
+
+  if (!sawMidSink) errors.push('never caught the look-back mid-turn after the goal (sinceLook never reached .5 within a bounded poll)');
+  else if (!onScreen(wallB)) errors.push('wall B was not in frame while the walls were still sinking (project=' + JSON.stringify(wallB) + ') — the look-back is not turning the camera in time with the sink');
+
+  const t1 = Date.now(); let wr2 = (await thinState()).wallsRetired;
+  while (Date.now() - t1 < 6000 && wr2 < .9) { await page.waitForTimeout(50); wr2 = (await thinState()).wallsRetired; }
+  if (wr2 < .9) errors.push('the dedicated repro never settled (wallsRetired=' + wr2 + ')');
+
+  // constrain must agree: walking back west through the corridor from the
+  // goal must not be blocked by a wall or the gap that are no longer there.
+  await setPos(GOAL_X(), CZ_Z());
+  await page.waitForTimeout(200);
+  const back = await walk('ArrowDown', { untilX: x => x <= 9.2, maxMs: 25000 }); // ArrowDown is -x in 3D
+  console.log('walk back west after the goal: x=' + back.x.toFixed(2) + ' z=' + back.z.toFixed(2));
+  if (back.x > 9.5) errors.push('could not walk back west through the retired corridor to x~9 (stopped at x=' + back.x.toFixed(2) + ', z=' + back.z.toFixed(2) + ')');
+  await page.screenshot({ path: shotDir + 'thin-walkback.png' });
+}
+
+// ---- load(d): a Continue of an already-finished Thin must land fully
+// retired immediately — no replayed look-back/sink, no walls left standing.
+// Mirrors tests/act1.mjs's saveWith({thin:true}). ----
+{
+  const applied = await page.evaluate(d => window.__DA.applySave(d), {
+    crossed: true, seeds: 3, awakened: .7, roomFold: 0, pos: [7, 0, -14], place: 'THIN',
+    s2: { done: 0, round: 0, arrived: false, active: false }, visited: ['thin'], t: Date.now(),
+    regions: { thin: { slotsPassed: 2, goalReached: true, gapCrossed: true, wallsPassed: [true, true] } },
+  });
+  if (!applied) errors.push('applySave(thin goalReached) was refused');
+  await page.waitForTimeout(200);
+  const s = await thinState();
+  console.log('applySave(goalReached=true): wallsRetired=' + s.wallsRetired);
+  if (s.wallsRetired !== 1) errors.push('a Continue of a finished Thin did not land fully retired (wallsRetired=' + s.wallsRetired + '), it should never replay the sink');
+}
+
 // ---- item 1's specific asserts: the carry must actually lapse, the fall
 // must actually happen, and it must happen before the goal, not after ----
 {

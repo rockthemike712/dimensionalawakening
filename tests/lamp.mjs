@@ -123,7 +123,7 @@ const inFrame=p=>p.x>=0&&p.x<=390&&p.y>=0&&p.y<=844;
 // ---- __DA must expose nothing new: it is a fixed set of core hooks, and
 // this revision only ever touches src/regions/lamp.js ----
 const daKeys=await page.evaluate(()=>Object.keys(window.__DA).sort());
-const EXPECTED_DA=['actDone','applySave','arrow','clearSave','counterShown','crossed','dim','digest','digested',
+const EXPECTED_DA=['actDone','applySave','arrow','cam','clearSave','counterShown','crossed','dim','digest','digested',
   'flat','fold','grown','jump3d','lm','loadSave','moves','next','pos','project','region','regions','residue','roomFold',
   'rings','s2','s2round','s2start','save','setPos','seeds','tapLm','tps','unlockRoom','_lm','_plane'].sort();
 const extra=daKeys.filter(k=>!EXPECTED_DA.includes(k));
