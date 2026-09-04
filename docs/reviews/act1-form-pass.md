@@ -94,4 +94,43 @@ A phone GPU will fare better than the software renderer on all three.
 
 ## Evidence
 
-_(filled in from the final on-foot run of the merged tree)_
+One continuous on-foot session of the merged tree at 390×844, title to the
+finished room, every rung earned in the fiction (the edge latched by drag,
+Thin's goal after a real fall and a re-flatten, both Corner gates in both
+orders, the Lamp's swap on the eye hold, the act done on the far light).
+Three `setPos` uses, all recoveries from bounded walks that timed out (a
+distant reed cluster, the Lamp before Thin, and the walk home after the
+risen room's geometry blocked the naive key-drive). No page or console
+errors. Frames at 1x in `docs/reviews/frames/act1-form-pass/`; `before-*`
+frames are the handoff tree.
+
+All eight suites green in one run on the merged tree.
+
+| what | measured | frames |
+|---|---|---|
+| The page | awakening already 0.25 at the first light; the disc has a soft chromatic edge; the grid breathes faintly | `page-first-light.jpg` |
+| The field | awakening 1.0; six frames standing still differ by a mean of 12–15 per channel, the floor drifting while nothing else moves; rainbow fringes on the lines in every 3D frame | `field-breathing-a.jpg`, `field-breathing-b.jpg`, against `before-field.png` |
+| The reeds | walking through a cluster: chromatic rims, the reeds leaning off the path | `reeds-rimmed.jpg` |
+| Thin | column A from overhead: floor still, rims faint, the frame as clean as before | `thin-column-calm.jpg` |
+| The Corner | after pulling A: the Corner's own patch is a plain static grid (the known limitation) | `corner-static-patch.jpg` |
+| The Lamp | the swap moment; the region is deliberately dark and the rims barely read here | `lamp-swap.jpg` |
+| The room | the rise fired on the approach; ten back-to-back frames with the camera east of the player from 21% to 80% of the rise: grid-textured walls and posts rising in stages behind the translucent screen, a ring of ripples running out | `room-rise-turn-a.jpg`, `room-rise-turn-b.jpg`, against `before-room-rise.png`; `room-finished.jpg` |
+
+### What is visible at phone size, honestly
+
+- The floor's undulation and fringes: **visible**, in every 3D frame.
+- The coherence wave: **marginal**. A passing band of straightened lines that
+  you notice once you know to look. Fine for an almost-order.
+- The reeds' breathing and rims: **visible**.
+- The player's and rings' iridescence: **marginal to weak** in 3D, clear on
+  the page's disc; in the Lamp's low light it does not read. The player is
+  meant to stay the cleanest object, so this is acceptable, but the rings
+  could carry more.
+- The room rising in stages: **visible** and easily read.
+
+### Next
+
+The Corner's patch should breathe like the rest of the floor (its shader
+copy needs the same warp and fringe, ahead of its hinges). The light rings'
+fringe could be pushed. The Lamp could use one warm rim on the player so the
+swap's two selves read in its low light. All three are small and local.
