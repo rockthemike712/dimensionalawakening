@@ -161,13 +161,34 @@ const MAX_RIP=6;
 export const planeMat=new THREE.ShaderMaterial({
   transparent:true, side:THREE.DoubleSide,
   uniforms:{uTime:{value:0},uFold:{value:0},uFold2:{value:0},uAwake:{value:0},uDim:{value:0},uWorld:{value:new THREE.Vector2(WORLD.x1,WORLD.z1)},
-    uWake:{value:new THREE.Vector2(0,0)},
+    uWake:{value:new THREE.Vector2(0,0)},uCalm:{value:0},
     uRip:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector4(0,0,-99,0))},
     uRipC:{value:Array.from({length:MAX_RIP},()=>new THREE.Vector3(.2,1,1.1))}},
   vertexShader:`
-    uniform float uTime; uniform float uFold; uniform float uFold2; uniform float uAwake; uniform float uDim; uniform vec2 uWake;
+    uniform float uTime; uniform float uFold; uniform float uFold2; uniform float uAwake; uniform float uDim; uniform vec2 uWake; uniform float uCalm;
     uniform vec4 uRip[${MAX_RIP}]; uniform vec3 uRipC[${MAX_RIP}];
-    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC;
+    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC; varying vec2 vWarp; varying float vCoh;
+    float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+    // a slow, low-frequency field that makes the lattice undulate and drift like fabric,
+    // rippling harder where the player has just walked
+    vec2 warp2(vec2 xz,float amt,float t,vec2 wake){
+      float w1=sin(xz.x*.5+xz.y*.33+t*.31);
+      float w2=cos(xz.x*.27-xz.y*.5-t*.24+1.3);
+      // value noise blended across the time-step boundary so the field never pops
+      vec2 c=floor(xz*.6);
+      float tt=t*.12, ft=floor(tt), ftf=smoothstep(0.0,1.0,fract(tt));
+      float h=mix(hash(c+ft),hash(c+ft+1.0),ftf)-.5;
+      vec2 w=vec2(w1*.6+h*.5,w2*.6-h*.5);
+      float wd=distance(xz,wake);
+      w*=1.0+exp(-wd*wd*.6)*.7;
+      return w*amt;
+    }
+    // once every ~11s (a little sooner or later depending on where you stand) the
+    // warp briefly resolves toward regular, then dissolves again
+    float coherence(vec2 xz,float t){
+      float ph=t*(6.2831853/11.0)+xz.x*.05+xz.y*.04;
+      return pow(clamp(sin(ph),0.0,1.0),4.0);
+    }
     void main(){
       vec3 p=position; vXZ=position.xz;
       float theta=uFold*1.42;
@@ -183,6 +204,16 @@ export const planeMat=new THREE.ShaderMaterial({
       vRipC=ripc;
       p.y+=rip*.22;
       vSide=step(0.0,position.x);
+      // the sheet undulates a little even on the 2D page (uAwake floor), a lot once awake;
+      // it holds still while folded or while the player is flattened (uCalm), and stays
+      // straight right at the seam so x=0 always reads
+      float coh=coherence(position.xz,uTime); vCoh=coh;
+      float calmK=1.0-uCalm*.85;
+      float edgeFade=smoothstep(0.0,3.0,abs(position.x));   // wide enough that the seam's glow band (~1 unit) never wobbles into dashes
+      float ampBase=mix(.035,.32,uAwake)*calmK*(1.0-coh*.92)*edgeFade;
+      vec2 w=warp2(position.xz,ampBase,uTime,uWake);
+      vWarp=w;
+      p.x+=w.x; p.z+=w.y; p.y+=(abs(w.x)+abs(w.y))*.12;   // mostly a warp in the plane: a taller swell hides the shadows at the player's and the reeds' feet
       if(p.x>0.0){ float x=p.x; p.x=cos(theta)*x; p.y+=sin(theta)*x; }
       // the room's second edge only folds the room's own floor (masked in z and x)
       float t2=uFold2*.62*(1.0-smoothstep(6.5,8.5,abs(position.z)))*(1.0-smoothstep(11.5,12.5,position.x));
@@ -195,10 +226,12 @@ export const planeMat=new THREE.ShaderMaterial({
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);
     }`,
   fragmentShader:`
-    uniform float uTime; uniform float uFold; uniform float uAwake; uniform float uDim; uniform vec2 uWorld;
+    uniform float uTime; uniform float uFold; uniform float uAwake; uniform float uDim; uniform vec2 uWorld; uniform float uCalm;
     uniform vec4 uRip[${MAX_RIP}]; uniform vec3 uRipC[${MAX_RIP}];
-    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC;
+    varying vec3 vPos; varying float vSide; varying vec2 vXZ; varying vec3 vRipC; varying vec2 vWarp; varying float vCoh;
     float grid(float x,float s){float q=abs(fract(x/s-.5)-.5)/fwidth(x/s);return 1.-min(q,1.);}
+    // hue-only HSV->RGB (S=V=1), cheap: the fringe's rainbow
+    vec3 hue2rgb(float h){vec3 c=clamp(abs(mod(h*6.0+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0,0.0,1.0);return c;}
     void main(){
       float g=max(grid(vPos.x,1.0),grid(vPos.z,1.0));
       float fine=max(grid(vPos.x,.25),grid(vPos.z,.25))*.18;
@@ -229,6 +262,17 @@ export const planeMat=new THREE.ShaderMaterial({
       col+=wrong*smoothstep(.45,1.0,m)*.24*uAwake*(g*.9+fine+.25);
       float drift=uAwake*.45*(.5+.5*sin(uTime*.4+length(vPos.xz)*.35));
       col=mix(col,col.brg,drift);
+      // iridescent fringe on the lines only: hue drifts with the warp and time,
+      // and splits into a cool/warm two-tone edge the way the fold's edge does
+      float calmK=1.0-uCalm*.85;
+      float hueBase=fract(uTime*.035+(vWarp.x-vWarp.y)*.6+vPos.x*.015-vPos.z*.012);
+      float gsx=fract(vPos.x-.5)-.5, gsz=fract(vPos.z-.5)-.5;
+      float side=(abs(gsx)<abs(gsz))?sign(gsx):sign(gsz);
+      vec3 fringe=mix(hue2rgb(hueBase-.14)*1.25,hue2rgb(hueBase+.14)*1.25,.5+.5*side);
+      col+=fringe*mix(.05,.40,uAwake)*(1.0-vCoh*.92)*calmK*g;
+      // almost-order: the coherence wave passing through pulls the lattice back to clean cyan,
+      // visibly straightening the lines as it crosses
+      col=mix(col,mix(a,b,g*.6+fine),vCoh*.68);
       gl_FragColor=vec4(col,.94);
     }`
 });
@@ -1065,6 +1109,8 @@ function animate(){
  fold+=(foldTarget-fold)*(1-Math.pow(.0001,dt));
  roomFold+=(roomFoldTarget-roomFold)*(1-Math.pow(.0005,dt));
  planeMat.uniforms.uTime.value=t;planeMat.uniforms.uFold.value=fold;planeMat.uniforms.uFold2.value=roomFold;planeMat.uniforms.uDim.value=dim;
+ // the sheet holds still while it is lifted (folding) or while the player is flattened
+ planeMat.uniforms.uCalm.value=Math.max(fold,Math.min(1,flat));
  // the ground's dimple trails just behind your own heading, not under your feet
  {const vl=velocity.length(), k=vl>1e-3?.8/vl:0; planeMat.uniforms.uWake.value.set(playerPos.x-velocity.x*k,playerPos.z-velocity.z*k);}
  if(S2.far)S2.far.rotation.z=roomFold*.62;
